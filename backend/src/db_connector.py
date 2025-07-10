@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from pangres import upsert
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 import sqlalchemy
 import pandas as pd
 import sys
@@ -24,20 +24,36 @@ else:
         jinja_env = Environment(loader=FileSystemLoader('src/queries/postgres'), undefined=StrictUndefined)
 
 class DbConnector:
-        def __init__(self, db_user=db_user, db_passwd=db_passwd, db_host=db_host, db_name=db_name):
-            self.url = f"postgresql+psycopg2://{db_user}:{db_passwd}@{db_host}/{db_name}"
-            self.uri = f"postgresql://{db_user}:{db_passwd}@{db_host}/{db_name}"
-            self.engine = sqlalchemy.create_engine(
-                self.url,
-                connect_args={
-                        "keepalives": 1,
-                        "keepalives_idle": 30,
-                        "keepalives_interval": 10,
-                        "keepalives_count": 5,
-                },
-                pool_size=20, max_overflow=20
-                )
-            print(f"Connected to {db_user}@{db_host}")
+        def __init__(self, user=None, passwd=None, host=None, db_name=None):
+                """
+                Initializes the database connector.
+                - If 'host' is provided, connects to a PostgreSQL database.
+                - If 'host' is None, connects to a local SQLite database using 'db_name' as the file path.
+                """
+                self.engine = None
+                if host and user and db_name:
+                        # --- PostgreSQL Connection ---
+                        conn_string = f'postgresql+psycopg2://{user}:{passwd}@{host}/{db_name}'
+                        self.engine = create_engine(
+                                        conn_string,
+                                        connect_args={
+                                                "keepalives": 1,
+                                                "keepalives_idle": 30,
+                                                "keepalives_interval": 10,
+                                                "keepalives_count": 5,
+                                        },
+                                        pool_size=20, max_overflow=20
+                                )
+                        print(f"Connected to PostgreSQL: {user}@{host}")
+                elif db_name:
+                        # --- SQLite Connection ---
+                        # The '///' is important for a relative file path.
+                        conn_string = f'sqlite:///{db_name}'
+                        self.engine = create_engine(conn_string)
+                        self.use_sqlite = True # Add a flag for easy checking elsewhere
+                        print(f"Connected to SQLite database: {db_name}")
+                else:
+                        raise ValueError("Database connection details are incomplete.")
 
         def upsert_table(self, table_name:str, df:pd.DataFrame, if_exists='update'):
                 batch_size = 100000

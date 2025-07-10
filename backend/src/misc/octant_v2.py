@@ -62,29 +62,30 @@ class OctantV2():
             raise Exception("Database connection not established")
 
         # # create database tables if they do not exist
-        # for table_key in table_definitions:
-        #     table_name = table_definitions[table_key]['table_name']
-        #     table_exists = self.table_exists(table_name)
-        #     logging.info(
-        #         f"Table {table_name} exists: {table_exists}")
+        for table_key in table_definitions:
+            table_name = table_definitions[table_key]['table_name']
+            table_exists = self.table_exists(table_name)
+            logging.info(
+                f"Table {table_name} exists: {table_exists}")
 
-        #     if not table_exists:
-        #         logging.info(
-        #             f"Running table creation for {table_name} table")
-        #         create_table_sql = generate_create_table_sql(
-        #             table_key=table_key, db_type='postgres')
+            if not table_exists:
+                logging.info(
+                    f"Running table creation for {table_name} table")
+                # Use 'sqlite' here to generate the correct table schema
+                create_table_sql = generate_create_table_sql(
+                    table_key=table_key, db_type='sqlite') 
 
-        #         # create the table in the database, all rows will have an id column when inserting/upserting (id is alphanumeric)
-        #         self.db_connector.engine.execute(
-        #             create_table_sql
-        #         )
+                # create the table in the database
+                self.db_connector.engine.execute(
+                    create_table_sql
+                )
 
-        # self.local_output_dir = f"./output/{api_version}/trackers/octantv2/"
-        # if self.is_local:
-        #     self.local_output_dir = f"./output/{api_version}/trackers/octantv2/"
-        #     # Create the output directory if it does not exist
-        #     if not os.path.exists(self.local_output_dir):
-        #         os.makedirs(self.local_output_dir)
+        self.local_output_dir = f"./output/{api_version}/trackers/octantv2/"
+        if self.is_local:
+            self.local_output_dir = f"./output/{api_version}/trackers/octantv2/"
+            # Create the output directory if it does not exist
+            if not os.path.exists(self.local_output_dir):
+                os.makedirs(self.local_output_dir)
 
     def table_exists(self, table_name: str):
         """
@@ -214,6 +215,11 @@ class OctantV2():
         allocations_df = pd.DataFrame(allocations)
         rewards_df = pd.DataFrame(rewards)
 
+        # print rewards_df columns and head
+        logging.info(f"Rewards DataFrame columns: {rewards_df.columns.tolist()}")
+        logging.info(f"Rewards DataFrame head:\n{rewards_df.head()}")
+        
+
         # sometimes a project's address will change epoch to epoch, so we need to create a project_key in the projects_metadata_df - we'll use the project's websiteLabel if it exists, otherwise we'll use the project's name
         projects_metadata_df['project_key'] = projects_metadata_df['websiteLabel'].fillna(
             projects_metadata_df['name'])
@@ -254,6 +260,9 @@ class OctantV2():
             else:
                 logging.info(
                     f"No allocations for epoch {epoch_info['epoch']}")
+                # fill donor_count and donor_list with None if there are no allocations
+                rewards_df['donor_count'] = None
+                rewards_df['donor_list'] = None
 
         else:
             logging.info(
@@ -261,6 +270,18 @@ class OctantV2():
 
         logging.info(
             "Saving Octant data to the database")
+        
+        # If using SQLite, convert Decimal columns to float before saving.
+        if hasattr(self.db_connector, 'use_sqlite') and self.db_connector.use_sqlite:
+            logging.info("Converting Decimal columns to float for SQLite compatibility before saving.")
+            if not budgets_df.empty:
+                budgets_df['amount'] = budgets_df['amount'].astype(float)
+            if not allocations_df.empty:
+                allocations_df['amount'] = allocations_df['amount'].astype(float)
+            if not rewards_df.empty:
+                rewards_df['allocated'] = rewards_df['allocated'].astype(float)
+                rewards_df['matched'] = rewards_df['matched'].astype(float)
+                rewards_df['total'] = rewards_df['total'].astype(float)
 
         # Save the final DataFrames to DB
         if not projects_metadata_df.empty:
@@ -441,6 +462,15 @@ class OctantV2():
         df.rename(columns={'blockNumber': 'block_number'}, inplace=True)
 
         logging.info(f"Loaded {len(df)} rows of GLM data")
+
+        # If using SQLite, convert Decimal columns to float before saving,
+        # as the native SQLite driver does not support Decimal.
+        if hasattr(self.db_connector, 'use_sqlite') and self.db_connector.use_sqlite:
+            logging.info("Converting Decimal columns to float for SQLite compatibility.")
+            decimal_cols = ['amount', 'current_total_locked', 'current_total_locked_for_user']
+            for col in decimal_cols:
+                if col in df.columns:
+                    df[col] = df[col].astype(float)
 
         # Save the resulting DataFrame to the database
         self.save_to_db(
@@ -765,6 +795,18 @@ class OctantV2():
         """
         user_data_df = self.load_from_db(
             'user_data')
+        
+        if hasattr(self.db_connector, 'use_sqlite') and self.db_connector.use_sqlite:
+            logging.info("Converting 'allocated_to_project_keys' string back to list for SQLite.")
+            # The `json.loads` function will parse the JSON string into a list.
+            # We use a try-except block to gracefully handle any empty/malformed strings.
+            def to_list(x):
+                try:
+                    return json.loads(x)
+                except (json.JSONDecodeError, TypeError):
+                    return [] # Return an empty list if it's not a valid JSON string
+            
+            user_data_df['allocated_to_project_keys'] = user_data_df['allocated_to_project_keys'].apply(to_list)
 
         # Initialize the compiled data dictionary
         compiled_data = []
@@ -833,6 +875,20 @@ class OctantV2():
 
         project_allocations_df = self.load_from_db(
             'project_allocations_and_matched_rewards')
+        
+        # If using SQLite, the JSON column is loaded as a string.
+        if hasattr(self.db_connector, 'use_sqlite') and self.db_connector.use_sqlite:
+            logging.info("Converting 'donor_list' string back to list for SQLite.")
+            def to_list(x):
+                try:
+                    # Filter out None or non-string values before parsing
+                    if isinstance(x, str):
+                        return json.loads(x)
+                    return []
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            
+            project_allocations_df['donor_list'] = project_allocations_df['donor_list'].apply(to_list)
 
         # Initialize the compiled data dictionary
         compiled_data = []
@@ -908,6 +964,9 @@ class OctantV2():
 
         # Group by 'project_key' and aggregate the data
         for project_key, group in projects_metadata_df.groupby('project_key'):
+            # If there are duplicate epochs for a project_key, keep only the last one.
+            # This prevents the "DataFrame index must be unique" error.
+            group = group.drop_duplicates(subset=['epoch'], keep='last')
             metadata = group.set_index('epoch').to_dict(orient='index')
 
             # get the latest websiteUrl for the project
@@ -1008,8 +1067,10 @@ class OctantV2():
                 self.s3_bucket, f'{self.api_version}/trackers/octant/summary', compiled_data, self.cf_distribution_id, invalidate=False)
             logging.info(
                 "/trackers/octant/summary.json uploaded to S3")
-            
-        empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/trackers/octant/*')
+        
+        # Only invalidate cache if we have a distribution ID (i.e., not a local run)
+        if self.cf_distribution_id:   
+            empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/trackers/octant/*')
 
     def load_epoch_data(self, epoch: int):
         """
@@ -1063,4 +1124,6 @@ class OctantV2():
         logging.info(f"# Creating Octant Project Metadata JSON")
         self.create_project_metadata_json()
 
-        empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/trackers/octant/*')
+        # Only invalidate cache if running on server with a distribution ID
+        if self.cf_distribution_id:
+            empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/trackers/octant/*')

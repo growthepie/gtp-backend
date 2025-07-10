@@ -48,3 +48,9 @@ backend/da_conf.pkl
 node_modules
 backend/add_new_date_indx.py
 backend/add_new_date.py
+
+# local output etc.. for octant
+output/
+.env.local
+*.db
+output.*
