@@ -63,8 +63,7 @@ if __name__ == '__main__':
     # you MUST enable the table creation logic in octant_v2.py (see instructions below).
 
     print("STEP 1: Loading data for all epochs into the SQLite database...")
-    # octant_runner.run_load_octant_data_for_all_epochs()
-    octant_runner.run_load_epoch_data(epoch=8)
+    octant_runner.run_load_octant_data_for_all_epochs()
     print("...Finished loading epoch data.")
 
     print("STEP 2: Creating all JSON output files locally from SQLite data...")

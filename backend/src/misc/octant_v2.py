@@ -3,6 +3,7 @@
 from src.db_connector import DbConnector
 from datetime import datetime
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -220,9 +221,25 @@ class OctantV2():
         logging.info(f"Rewards DataFrame head:\n{rewards_df.head()}")
         
 
+        # --- OLD PROJECT_KEY LOGIC ---
         # sometimes a project's address will change epoch to epoch, so we need to create a project_key in the projects_metadata_df - we'll use the project's websiteLabel if it exists, otherwise we'll use the project's name
-        projects_metadata_df['project_key'] = projects_metadata_df['websiteLabel'].fillna(
-            projects_metadata_df['name'])
+        # projects_metadata_df['project_key'] = projects_metadata_df['websiteLabel'].fillna(
+        #     projects_metadata_df['name'])
+        # --- END OLD PROJECT_KEY LOGIC ---
+
+        # sometimes a project's address will change epoch to epoch, so we need to create a project_key.
+        # We use the project's name as the key if the websiteLabel is missing or contains 'github.com'.
+        # Otherwise, we use the websiteLabel.
+        use_name_as_key = (
+            projects_metadata_df['websiteLabel'].isnull() |
+            projects_metadata_df['websiteLabel'].str.contains('github.com', na=False)
+        )
+
+        projects_metadata_df['project_key'] = np.where(
+            use_name_as_key,                               # Condition
+            projects_metadata_df['name'],                  # Value if condition is True
+            projects_metadata_df['websiteLabel']           # Value if condition is False
+        )
 
         # rename the profileImage columns and the websiteLabel, websiteUrl, introDescription columns
         projects_metadata_df.rename(
@@ -261,8 +278,8 @@ class OctantV2():
                 logging.info(
                     f"No allocations for epoch {epoch_info['epoch']}")
                 # fill donor_count and donor_list with None if there are no allocations
-                rewards_df['donor_count'] = None
-                rewards_df['donor_list'] = None
+                rewards_df['donor_count'] = 0
+                rewards_df['donor_list'] = [[] for _ in range(len(rewards_df))]
 
         else:
             logging.info(
@@ -964,9 +981,6 @@ class OctantV2():
 
         # Group by 'project_key' and aggregate the data
         for project_key, group in projects_metadata_df.groupby('project_key'):
-            # If there are duplicate epochs for a project_key, keep only the last one.
-            # This prevents the "DataFrame index must be unique" error.
-            group = group.drop_duplicates(subset=['epoch'], keep='last')
             metadata = group.set_index('epoch').to_dict(orient='index')
 
             # get the latest websiteUrl for the project
