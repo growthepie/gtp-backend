@@ -42,6 +42,10 @@ def run_dag():
         df = df.set_index(['date', 'origin_key', 'metric_key'])
         eigen.load(df)
 
+        # How to find out new namespaces
+        # df = eigen.call_api_endpoint()
+        # df.groupby(['account_name']).sum().reset_index()
+
     run_eigendata_extract_load()
 
 run_dag()

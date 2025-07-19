@@ -50,7 +50,7 @@ class AdapterLabelPool(AbstractAdapter):
             df['tx_id'] = df['tx_id'].apply(lambda x: '\\x' + x[2:] if isinstance(x, str) and x.startswith('0x') else '\\x')
             # set id as index
             df = df.set_index('id')
-            # load df into db, updated row if id already exists
+            # load df into db, update row if id already exists
             self.db_connector.upsert_table('oli_label_pool_bronze', df, if_exists='update')
         print_load(self.name + ' bronze', {}, df.shape)
 
@@ -97,20 +97,19 @@ class AdapterLabelPool(AbstractAdapter):
                 df_air['error'] = None
                 df_air['error'] = df_air.apply(
                     lambda row: (row['error'] or '') + f" failed owner_project: '{row['owner_project'][0]}'" 
-                    if not row['owner_project'][0].startswith('rec') else row['error'], axis=1
+                    if row['owner_project'][0] is not None and not row['owner_project'][0].startswith('rec') else row['error'], axis=1
                 )
                 df_air['error'] = df_air.apply(
                     lambda row: (row['error'] or '') + f" failed usage_category: '{row['usage_category'][0]}'" 
-                    if not row['usage_category'][0].startswith('rec') else row['error'], axis=1
+                    if row['usage_category'][0] is not None and not row['usage_category'][0].startswith('rec') else row['error'], axis=1
                 )
-                df_air['usage_category'] = df_air['usage_category'].apply(lambda x: x if x[0].startswith('rec') else [])
-                df_air['owner_project'] = df_air['owner_project'].apply(lambda x: x if x[0].startswith('rec') else [])
+                df_air['usage_category'] = df_air['usage_category'].apply(lambda x: x if x[0] is not None and x[0].startswith('rec') else [])
+                df_air['owner_project'] = df_air['owner_project'].apply(lambda x: x if x[0] is not None and x[0].startswith('rec') else [])
                 # write to airtable df
                 at.push_to_airtable(table, df_air)
                 # send discord message
                 send_discord_message(f"{df_air.shape[0]} new attestations submitted to label pool, please review in airtable.", self.webhook)
-                send_discord_message(f"```\n{df_air.to_markdown(index=False)}\n```", self.webhook)
-
+                #send_discord_message(f"```\n{df_air.to_markdown(index=False)}\n```", self.webhook)
 
     ## ----------------- Helper functions --------------------
 

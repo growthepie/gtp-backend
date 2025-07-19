@@ -652,15 +652,16 @@ class RtBackend:
                 return 0
                 
             total_tx = oldest_block["tx_count"] + newest_block["tx_count"]
-            return total_tx / time_diff
+            return total_tx / (time_diff * 2) # 2 blocks, so multiply time_diff by 2
             
-        else:  # 3 blocks available
+        if len(block_history) == 3:  # 3 blocks available
             oldest_block = block_history[0]
             newest_block = block_history[2]
             
             time_diff = newest_block["timestamp"] - oldest_block["timestamp"]
             if time_diff <= 0:
                 return 0
+            time_diff += time_diff / 2  # it's a 3-block average, so add half the time diff
                 
             total_tx = sum(block["tx_count"] for block in block_history)
             
@@ -669,6 +670,9 @@ class RtBackend:
             #     logger.debug(f"TPS calculation using {estimated_blocks} estimated blocks out of {len(block_history)}")
             
             return total_tx / time_diff
+        else:
+            logger.error(f"Unexpected block history length: {len(block_history)}")
+            return 0  # Should not happen, but just in case
         
     def _update_chain_data(self, chain_name: str, block_number: int, timestamp: int, 
                           tx_count: int, tps: float) -> None:

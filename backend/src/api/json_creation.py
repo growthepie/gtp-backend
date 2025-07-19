@@ -1344,7 +1344,7 @@ class JSONCreation():
                 }
 
                 if self.metrics[metric]['ranking_bubble']:
-                    ranking_dict[metric] = self.get_ranking(df_tmp, metric, origin_key)
+                    ranking_dict[metric] = self.get_ranking(df_tmp, metric, origin_key, incl_value=False, filter_ethereum=False)
             
             ## Hottest Contract
             if chain.runs_aggregate_blockspace and 'blockspace' not in chain.api_exclude_metrics:
@@ -3217,6 +3217,36 @@ class JSONCreation():
                 self.save_to_json(metric_dict, f'metric_{metric}')
             else:
                 upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/export/{metric}', metric_dict, self.cf_distribution_id)
+                
+    def create_custom_metrics_json(self, custom_metrics):
+        for metric in custom_metrics:
+            df_main = pd.DataFrame()
+            for origin_key in self.chains_list_in_api:
+                query_parameters = {
+                    'origin_key': origin_key,
+                    'metric_key': metric,
+                    'days': 9999
+                }
+                df = execute_jinja_query(self.db_connector, "api/select_fact_kpis.sql.j2", query_parameters, return_df=True)
+                df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC').astype(str)
+                df['origin_key'] = origin_key
+                df['metric_key'] = metric
+                df['value'] = df['value'].astype(int)
+
+                df_main = pd.concat([df_main, df], ignore_index=True)
+            
+            ## convert df_main to a dictionary 
+            data_dict = {}
+            
+            data_dict['data'] = df_main.to_dict(orient='records')
+
+            data_dict['last_updated_utc'] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            data_dict = fix_dict_nan(data_dict, 'custom_metrics')
+
+            if self.s3_bucket == None:
+                self.save_to_json(data_dict, f'custom_metrics {metric}')
+            else:
+                upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/export/{metric}', data_dict, self.cf_distribution_id)
 
     ## TODO: DEPRECATE
     def create_contracts_json(self):

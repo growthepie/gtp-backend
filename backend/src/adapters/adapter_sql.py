@@ -388,7 +388,7 @@ class AdapterSQL(AbstractAdapter):
                         if origin_key == 'ethereum' and granularity != 'hourly':
                                 continue
                         
-                        if origin_key in ['mantle', 'metis']:
+                        if origin_key in ['mantle', 'metis', 'celo']:
                             ## a little more complex cte because our coingecko data can be 1 day behind
                             additional_cte = f"""
                                 date_series AS (

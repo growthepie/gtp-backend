@@ -19,7 +19,7 @@ from src.misc.airflow_utils import alert_via_webhook
     description='Load data from Octant API for tracker.',
     tags=['other', 'near-real-time'],
     start_date=datetime(2024,7,22),
-    schedule='*/30 * * * *'
+    schedule='*/05 * * * *'
 )
 
 def run_dag():
@@ -37,7 +37,7 @@ def run_dag():
         octantv2 = OctantV2(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, api_version)
         #octantv2.run_load_octant_data_for_all_epochs()
         print('### LOAD DATA FOR LATEST EPOCH ###')
-        octantv2.run_load_epoch_data(7)
+        octantv2.run_load_epoch_data(8)
         
         print('### CREATE ALL OCTANT JSONS ###')
         octantv2.run_create_all_octant_jsons()

@@ -657,7 +657,7 @@ def get_trusted_entities(db_connector):
     df = df.drop(columns=['tags'])
     # get all_tag from oli github
     all_tags = get_all_gtp_tags(db_connector)['tag_id'].tolist()
-    all_tags = [tag.replace('oli.', '') for tag in all_tags]
+    all_tags = [tag.replace('oli.', '') for tag in all_tags] # not needed anymore
     # make a list of tag_id, if tag_id is "*" then add all tags
     df['tag_id_list'] = df['tag_id'].apply(lambda x: all_tags if x == "*" else [x])
     # expand the list of tag_ids into separate rows

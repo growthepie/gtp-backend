@@ -4,6 +4,7 @@ from src.db_connector import DbConnector
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import numpy as np
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -216,12 +217,7 @@ class OctantV2():
         allocations_df = pd.DataFrame(allocations)
         rewards_df = pd.DataFrame(rewards)
 
-        # print rewards_df columns and head
-        logging.info(f"Rewards DataFrame columns: {rewards_df.columns.tolist()}")
-        logging.info(f"Rewards DataFrame head:\n{rewards_df.head()}")
-        
-
-        # --- OLD PROJECT_KEY LOGIC ---
+         # --- OLD PROJECT_KEY LOGIC ---
         # sometimes a project's address will change epoch to epoch, so we need to create a project_key in the projects_metadata_df - we'll use the project's websiteLabel if it exists, otherwise we'll use the project's name
         # projects_metadata_df['project_key'] = projects_metadata_df['websiteLabel'].fillna(
         #     projects_metadata_df['name'])

@@ -321,6 +321,17 @@ stables_metadata = {
             "base": "0x35E5dB674D8e93a03d814FA0ADa70731efe8a4b9"
         }
     },
+    "pusd": {                            # PUSD
+        "name": "Plume USD",
+        "symbol": "pUSD",
+        "decimals": 6,
+        "coingecko_id": "plume-usd",
+        "fiat": "usd",
+        "logo": None,
+        "addresses": {
+            "plume": "0xdddD73F5Df1F0DC31373357beAC77545dC5A6f3F"
+        }
+    }
 }
 
 
@@ -911,37 +922,55 @@ stables_mapping = {
         }
     },
     "base": {
-    # ────────────────────── bridge escrows on Ethereum (locked value) ──────────────────────
-    "bridged": {
-        "ethereum": [
-            "0x49048044D57e1C92A77f79988d21Fa8fAF74E97e",  # Base: L1StandardBridge (ETH + ERC-20)
-            "0x3154Cf16ccdb4C6d922629664174b904d80F2C35",  # Base: L1 ERC-20 bridge vault
-        ]
-    },
+        # ────────────────────── bridge escrows on Ethereum (locked value) ──────────────────────
+        "bridged": {
+            "ethereum": [
+                "0x49048044D57e1C92A77f79988d21Fa8fAF74E97e",  # Base: L1StandardBridge (ETH + ERC-20)
+                "0x3154Cf16ccdb4C6d922629664174b904d80F2C35",  # Base: L1 ERC-20 bridge vault
+            ]
+        },
 
-    # ────────────────────── tokens natively minted on Base ──────────────────────
-    "direct": {
-        "usdc": {                    # USDC
-            "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-            "method_name":  "totalSupply",
+        # ────────────────────── tokens natively minted on Base ──────────────────────
+        "direct": {
+            "usdc": {                    # USDC
+                "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "method_name":  "totalSupply",
+            },
+            "ethena-usde": {            # USDe
+                "token_address": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+                "method_name":  "totalSupply",
+            },
+            "euro-coin": {              # EURC
+                "token_address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+                "method_name":  "totalSupply",
+            },
+            "openusdt": {               # oUSDT
+                "token_address": "0x1217BfE6c773EEC6cc4A38b5Dc45B92292B6E189",
+                "method_name":  "totalSupply",
+            },
+            "resolv-usr": {             # USR
+                "token_address": "0x35E5dB674D8e93a03d814FA0ADa70731efe8a4b9",
+                "method_name":  "totalSupply",
+            },
         },
-        "ethena-usde": {            # USDe
-            "token_address": "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
-            "method_name":  "totalSupply",
-        },
-        "euro-coin": {              # EURC
-            "token_address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
-            "method_name":  "totalSupply",
-        },
-        "openusdt": {               # oUSDT
-            "token_address": "0x1217BfE6c773EEC6cc4A38b5Dc45B92292B6E189",
-            "method_name":  "totalSupply",
-        },
-        "resolv-usr": {             # USR
-            "token_address": "0x35E5dB674D8e93a03d814FA0ADa70731efe8a4b9",
-            "method_name":  "totalSupply",
-        },
-    },
 
-},
+    },
+    
+    "plume": {
+        "bridged": {
+            "ethereum": [
+                "0xE2C902BC61296531e556962ffC81A082b82f5F28",  # Generic escrow contract for bridged tokens
+            ]
+        },
+        "direct": {
+            "usdc": {
+                "token_address": "0x78adD880A697070c1e765Ac44D65323a0DcCE913",  # USDC native on Plume
+                "method_name": "totalSupply",
+            },
+            "pusd": {
+                "token_address": "0xdddD73F5Df1F0DC31373357beAC77545dC5A6f3F",  # PUSD native on Plume
+                "method_name": "totalSupply",
+            },
+        }
+    },
 }

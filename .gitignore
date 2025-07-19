@@ -12,6 +12,8 @@ venv/
 
 *.ipynb
 *.html
+*.csv
+*.parquet
 backend/output/
 backend/local/
 screenshots/

@@ -395,16 +395,16 @@ class DbConnector:
                         SELECT 
                                 date
                                 ,origin_key
-                                ,SUM(CASE WHEN metric_key in ('ethereum_blob_size_bytes', 'celestia_blob_size_bytes') THEN value END) AS blob_size_bytes
+                                ,SUM(CASE WHEN metric_key in ('ethereum_blob_size_bytes', 'celestia_blob_size_bytes', 'eigenda_blob_size_bytes') THEN value END) AS blob_size_bytes
 
-                                ,SUM(CASE WHEN metric_key in ('ethereum_blobs_eth', 'celestia_blobs_eth') THEN value END) AS costs_blobs_eth
+                                ,SUM(CASE WHEN metric_key in ('ethereum_blobs_eth', 'celestia_blobs_eth', 'eigenda_blobs_eth') THEN value END) AS costs_blobs_eth
                                 ,SUM(CASE WHEN metric_key in ('cost_l1_raw_eth', 'l1_settlement_custom_eth') THEN value END) AS costs_l1_eth
                                 ,SUM(CASE WHEN metric_key in ('cost_l1_raw_eth', 'ethereum_blobs_eth') THEN value END) AS rent_paid_eth
 
-                                ,SUM(CASE WHEN metric_key in ('ethereum_blobs_eth', 'celestia_blobs_eth', 'cost_l1_raw_eth', 'l1_settlement_custom_eth') THEN value END) AS costs_total_eth
+                                ,SUM(CASE WHEN metric_key in ('ethereum_blobs_eth', 'celestia_blobs_eth', 'eigenda_blobs_eth', 'cost_l1_raw_eth', 'l1_settlement_custom_eth') THEN value END) AS costs_total_eth
                                 {profit_string}
                         FROM fact_kpis tkd
-                        WHERE metric_key in ('ethereum_blob_size_bytes', 'celestia_blob_size_bytes', 'celestia_blobs_eth', 'ethereum_blobs_eth', 'cost_l1_raw_eth', 'l1_settlement_custom_eth', 'fees_paid_eth')
+                        WHERE metric_key in ('ethereum_blob_size_bytes', 'eigenda_blob_size_bytes', 'celestia_blob_size_bytes', 'eigenda_blobs_eth', 'celestia_blobs_eth', 'ethereum_blobs_eth', 'cost_l1_raw_eth', 'l1_settlement_custom_eth', 'fees_paid_eth')
                                 {exclude_string}
                                 {ok_string}
                                 AND date >= date_trunc('day',now()) - interval '{days} days'
