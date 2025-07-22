@@ -228,13 +228,14 @@ class OctantV2():
         # Otherwise, we use the websiteLabel.
         use_name_as_key = (
             projects_metadata_df['websiteLabel'].isnull() |
-            projects_metadata_df['websiteLabel'].str.contains('github.com', na=False)
+            projects_metadata_df['websiteLabel'].str.contains('github.com', na=False) |
+            projects_metadata_df['websiteLabel'].str.contains('growthepie', na=False)
         )
 
         projects_metadata_df['project_key'] = np.where(
             use_name_as_key,                               # Condition
-            projects_metadata_df['name'],                  # Value if condition is True
-            projects_metadata_df['websiteLabel']           # Value if condition is False
+            projects_metadata_df['name'].str.lower(),      # Value if condition is True
+            projects_metadata_df['websiteLabel'].str.lower().str.replace(r'[^a-zA-Z0-9\.]', '', regex=True)          # Value if condition is False, replace special characters with blank
         )
 
         # rename the profileImage columns and the websiteLabel, websiteUrl, introDescription columns
