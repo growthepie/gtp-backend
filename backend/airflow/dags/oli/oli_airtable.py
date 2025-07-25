@@ -109,6 +109,8 @@ def etl():
         """
         This task gets the trusted entities from the gtp-dna Github and upserts them to the oli_trusted_entities table.
         """
+        # TODO: change the trusted entities to also allow for chain filtering!
+
         from src.misc.helper_functions import get_trusted_entities
         from src.db_connector import DbConnector
         db_connector = DbConnector()
