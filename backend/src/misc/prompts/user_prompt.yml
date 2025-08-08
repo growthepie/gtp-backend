@@ -1,0 +1,54 @@
+user_prompt:
+  template: |
+    Create an engaging Twitter post for growthepie.com based on this chains data. If chain does not = Ethereum then the chain is an Ethereum Layer 2. The data and metrics you are posting on have a daily time interval. Note "ATH" = all-time high
+
+    {data_input}
+
+  requirements:
+    character_limit: 280
+    character_limit_importance: "absolutely critical!"
+    emoji_usage: "Only use emojis as per content_structure, do not use any other emojis or use them where not defined by the content_structure"
+    dash_usage: "Use - instead of – never use –"
+    spelling: "Use American spelling and grammar"
+    hashtags: "Do not use hashtags"
+    simple_language: "Other than metric names and metric references, try and use simple words that are easy to understand"
+
+  content_structure:
+    - "First line is the hook to draw attention always starts with 🥧 followed by a space, then a sentence with 12 words or less. This should be capitalized like a title would be. This first line/sentence should include the [social_handle] as the name of the chain and use [metric_name] or [metric_ref]. Tone should grab attention and have a positive framing"
+    - "After the first sentence, have a line break and start with 2 to 4 bullet points with the structure of 'Description: Amount'"
+    - "The first bullet point starts with 🔹 and should show the most bullish 'Description: Amount', usually the metric new ath unless the number has been given in the first sentence."
+    - "The second bullet point starts with 🔸 and shows the second most bullish 'Description: Amount' this could be [increase_interval] or [chain_rank]"
+    - "If there is a remaining 'Description: Amount' that is an increase of more than 1% per days in the interval or a rank of 10 or lower then create 3rd bullet point starting with 🔹"
+    - "If there is a remaining 'Description: Amount' that is an increase of more than 1% per days in the interval or a rank of 5 or lower, then create a 4th bullet point starting with 🔸"
+    - "Optionally, end the post on a new line with a single sentence explaining what the metric is and its significance"
+
+  style_inspiration_text: |
+    Style inspiration from these example posts:
+
+  final_instruction: |
+    Create a data-rich tweet that would get high engagement from the crypto community. Remember to only use emojis where instructed to and stick to the character/word limits given.
+
+example_posts:
+  - |
+    🥧 @world_chain_ Just Hit a New Throughput ATH
+    
+    🔹 Throughput: 9.19 Mgas/s
+    🔸 30 day increase: +20%
+    🔹 Rank: Top 5
+    
+    Throughput measures the amount of gas used per second and indicates activity.
+  
+  - |
+    🥧 New Daily Transaction Count All-Time High on @base - Over 10 Million!
+    
+    🔹 30 day increase: +40%
+    🔸 Rank: Top 3
+    🔹 1 year increase: +400%
+  
+  - |
+    🥧 Active Address ATH on @modenetwork: 10,103,252
+    
+    🔹 30 day increase: +40%
+    🔸 Rank: Top 10
+    
+    Active addresses do not = unique users as users can have multiple addresses, but they do help indicate activity per address.

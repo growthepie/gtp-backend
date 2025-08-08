@@ -101,6 +101,7 @@ def date_to_unix_timestamp(year, month, day):
 def find_first_block_of_day(w3, target_timestamp):
     """
     Finds the first block of the day based on a target timestamp using a binary search.
+    Includes error handling for missing blocks during the search.
 
     Args:
         w3: Web3 instance to interact with the Ethereum blockchain.
@@ -111,9 +112,46 @@ def find_first_block_of_day(w3, target_timestamp):
     """
     min_block = 0
     max_block = w3.eth.block_number
+    
+    def safe_get_block(block_num):
+        """Safely get a block, handling cases where the block doesn't exist."""
+        try:
+            return w3.eth.get_block(block_num)
+        except Exception as e:
+            print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
+            return None
+    
     while min_block <= max_block:
         mid_block = (min_block + max_block) // 2
-        mid_block_timestamp = w3.eth.get_block(mid_block).timestamp
+        
+        # Try to get the block, handle missing blocks
+        block = safe_get_block(mid_block)
+        if block is None:
+            # If mid_block doesn't exist, try to find a nearby block that does
+            found_block = False
+            for offset in range(1, min(100, max_block - mid_block + 1)):
+                # Try blocks after mid_block
+                if mid_block + offset <= max_block:
+                    block = safe_get_block(mid_block + offset)
+                    if block is not None:
+                        mid_block = mid_block + offset
+                        found_block = True
+                        break
+                
+                # Try blocks before mid_block
+                if mid_block - offset >= min_block:
+                    block = safe_get_block(mid_block - offset)
+                    if block is not None:
+                        mid_block = mid_block - offset
+                        found_block = True
+                        break
+            
+            if not found_block:
+                print(f"Could not find any valid blocks around {mid_block} (0x{mid_block:x})")
+                # Fallback: return the minimum block that should exist
+                return max(min_block, 1)
+        
+        mid_block_timestamp = block.timestamp
 
         if mid_block_timestamp < target_timestamp:
             min_block = mid_block + 1
@@ -121,7 +159,10 @@ def find_first_block_of_day(w3, target_timestamp):
             max_block = mid_block - 1
         else:
             # Find the first block of the day
-            while w3.eth.get_block(mid_block - 1).timestamp >= target_timestamp:
+            while mid_block > 0:
+                prev_block = safe_get_block(mid_block - 1)
+                if prev_block is None or prev_block.timestamp < target_timestamp:
+                    break
                 mid_block -= 1
             return mid_block
 
@@ -130,6 +171,7 @@ def find_first_block_of_day(w3, target_timestamp):
 def find_last_block_of_day(w3, target_timestamp):
     """
     Finds the last block of the day based on a target timestamp using a binary search.
+    Includes error handling for missing blocks during the search.
 
     Args:
         w3: Web3 instance to interact with the Ethereum blockchain.
@@ -141,11 +183,47 @@ def find_last_block_of_day(w3, target_timestamp):
     # Set the end of the day timestamp (23:59:59 of the target day)
     end_of_day_timestamp = target_timestamp + 86400 - 1  # 86400 seconds in a day, -1 to stay in the same day
 
+    def safe_get_block(block_num):
+        """Safely get a block, handling cases where the block doesn't exist."""
+        try:
+            return w3.eth.get_block(block_num)
+        except Exception as e:
+            print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
+            return None
+
     min_block = 0
     max_block = w3.eth.block_number
     while min_block <= max_block:
         mid_block = (min_block + max_block) // 2
-        mid_block_timestamp = w3.eth.get_block(mid_block).timestamp
+        
+        # Try to get the block, handle missing blocks
+        block = safe_get_block(mid_block)
+        if block is None:
+            # If mid_block doesn't exist, try to find a nearby block that does
+            found_block = False
+            for offset in range(1, min(100, max_block - mid_block + 1)):
+                # Try blocks after mid_block
+                if mid_block + offset <= max_block:
+                    block = safe_get_block(mid_block + offset)
+                    if block is not None:
+                        mid_block = mid_block + offset
+                        found_block = True
+                        break
+                
+                # Try blocks before mid_block
+                if mid_block - offset >= min_block:
+                    block = safe_get_block(mid_block - offset)
+                    if block is not None:
+                        mid_block = mid_block - offset
+                        found_block = True
+                        break
+            
+            if not found_block:
+                print(f"Could not find any valid blocks around {mid_block} (0x{mid_block:x})")
+                # Fallback: return the maximum block that should exist
+                return max_block
+        
+        mid_block_timestamp = block.timestamp
 
         if mid_block_timestamp < end_of_day_timestamp:
             min_block = mid_block + 1
@@ -153,7 +231,10 @@ def find_last_block_of_day(w3, target_timestamp):
             max_block = mid_block - 1
         else:
             # Find the last block of the day
-            while mid_block < max_block and w3.eth.get_block(mid_block + 1).timestamp <= end_of_day_timestamp:
+            while mid_block < max_block:
+                next_block = safe_get_block(mid_block + 1)
+                if next_block is None or next_block.timestamp > end_of_day_timestamp:
+                    break
                 mid_block += 1
             return mid_block
 
