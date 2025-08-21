@@ -13,6 +13,7 @@
 # exceptions: (optional) a dictionary of exceptions for the token on different chains, e.g. if the token is bridged and natively minted on a chain (example: USDT0 on Arbitrum)
 
 #TODO: add logic for non-usd backed stables (should be enough to add the token to the total supply calculation)
+# NOTE: Non-USD stables (EUR, BRL) added below - require currency conversion logic in adapter
 
 stables_metadata = {
     "usdc": {
@@ -330,6 +331,52 @@ stables_metadata = {
         "logo": None,
         "addresses": {
             "plume": "0xdddD73F5Df1F0DC31373357beAC77545dC5A6f3F"
+        }
+    },
+    # Non-USD Stablecoins
+    "euro-coin": {                       # EURC
+        "name": "Euro Coin",
+        "symbol": "EURC",
+        "decimals": 6,
+        "coingecko_id": "euro-coin",
+        "fiat": "eur",
+        "logo": "https://assets.coingecko.com/coins/images/26045/large/euro-coin.png?1696525125",
+        "addresses": {
+            "ethereum": "0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c"
+        }
+    },
+    "monerium-eur-money": {              # EURe
+        "name": "Monerium EUR emoney",
+        "symbol": "EURe",
+        "decimals": 18,
+        "coingecko_id": "monerium-eur-money",
+        "fiat": "eur",
+        "logo": None,
+        "addresses": {
+            "ethereum": "0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f"
+        }
+    },
+    "brz": {                             # BRZ
+        "name": "Brazilian Digital Token",
+        "symbol": "BRZ",
+        "decimals": 4,
+        "coingecko_id": "brz",
+        "fiat": "brl",
+        "logo": None,
+        "addresses": {
+            "ethereum": "0x420412E765BFa6d85aaaC94b4f7b708C89be2e2B"
+        }
+    },
+    "stasis-eurs": {                     # EURS
+        "name": "STASIS EURS",
+        "symbol": "EURS",
+        "decimals": 2,
+        "coingecko_id": "stasis-eurs",
+        "fiat": "eur",
+        "logo": "https://assets.coingecko.com/coins/images/5164/large/EURS_300x300.png?1696505756",
+        "addresses": {
+            "ethereum": "0xdB25f211AB05b1c97D595516F45794528a807ad8",
+            "polygon": "0xE111178A87A3BfF0c8d18dECBa5798827539Ae99"
         }
     }
 }
