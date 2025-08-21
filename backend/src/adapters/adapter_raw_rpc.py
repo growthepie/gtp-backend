@@ -30,6 +30,7 @@ class NodeAdapter(AbstractAdapterRaw):
         self.rpc_stats = {rpc_config['url']: {'rows_loaded': 0, 'time_per_block': []} for rpc_config in self.rpc_configs}
 
         self.active_rpcs = set()  # Keep track of active RPC configurations
+        self.rpc_timeouts = {}  # Track processing start times for timeout detection
 
         self.chain = adapter_params['chain']
         self.table_name = f'{self.chain}_tx'
@@ -100,6 +101,48 @@ class NodeAdapter(AbstractAdapterRaw):
             print(f"  - Number of Workers: {workers}")
             print(f"  - Transactions Per Second (TPS): {tps:.2f}")
         print("==========================")
+    
+    def check_and_kick_slow_rpcs(self, rpc_errors, error_lock):
+        """
+        Checks for RPCs that are taking too long (>10 minutes) for a single block range.
+        Kicks them out if there are other active RPCs available.
+        
+        Args:
+            rpc_errors (dict): Dictionary tracking errors for each RPC configuration.
+            error_lock (Lock): Thread lock to synchronize access to rpc_errors.
+        """
+        current_time = time.time()
+        timeout_threshold = 600  # 10 minutes in seconds
+        rpcs_to_kick = []
+        
+        # Check each RPC for timeouts
+        for rpc_url, start_times in self.rpc_timeouts.items():
+            if rpc_url not in self.active_rpcs:
+                continue
+                
+            # Check if any block range has been processing for more than 10 minutes
+            for block_range, start_time in start_times.items():
+                if current_time - start_time > timeout_threshold:
+                    # Only kick if there are other active RPCs
+                    if len(self.active_rpcs) > 1:
+                        rpcs_to_kick.append((rpc_url, block_range))
+                        print(f"TIMEOUT DETECTED: {rpc_url} has been processing {block_range} for {(current_time - start_time):.1f}s (>{timeout_threshold}s)")
+                    else:
+                        print(f"TIMEOUT WARNING: {rpc_url} is slow ({(current_time - start_time):.1f}s) but it's the only active RPC")
+        
+        # Kick the slow RPCs
+        with error_lock:
+            for rpc_url, block_range in rpcs_to_kick:
+                if rpc_url in self.active_rpcs:
+                    print(f"KICKING SLOW RPC: Removing {rpc_url} due to timeout on {block_range}")
+                    self.active_rpcs.discard(rpc_url)
+                    # Remove from rpc_configs to prevent restart
+                    self.rpc_configs = [rpc for rpc in self.rpc_configs if rpc['url'] != rpc_url]
+                    # Clean up timeout tracking for this RPC
+                    if rpc_url in self.rpc_timeouts:
+                        del self.rpc_timeouts[rpc_url]
+                    # Increment error count to ensure proper tracking
+                    rpc_errors[rpc_url] = rpc_errors.get(rpc_url, 0) + 1000  # Large number to ensure removal
 
     def run(self, block_start, batch_size):
         """
@@ -241,6 +284,9 @@ class NodeAdapter(AbstractAdapterRaw):
                     new_thread.start()
                     break
 
+            # Check for slow RPCs and kick them if necessary
+            self.check_and_kick_slow_rpcs(rpc_errors, error_lock)
+            
             time.sleep(5)  # Sleep to avoid high CPU usage
 
         # Join all initial threads
@@ -315,43 +361,64 @@ class NodeAdapter(AbstractAdapterRaw):
         """
         while rpc_config['url'] in self.active_rpcs and not block_range_queue.empty():
             block_range = None
+            block_range_key = None
+            rpc_url = rpc_config['url']
+            
             try:
                 block_range = block_range_queue.get(timeout=5)
-                print(f"...processing block range {block_range[0]}-{block_range[1]} from {rpc_config['url']}")
+                block_range_key = f"{block_range[0]}-{block_range[1]}"
+                
+                print(f"...processing block range {block_range_key} from {rpc_url}")
 
-                # Start timing the processing
+                # Track start time for timeout detection
                 start_time = time.time()
+                if rpc_url not in self.rpc_timeouts:
+                    self.rpc_timeouts[rpc_url] = {}
+                self.rpc_timeouts[rpc_url][block_range_key] = start_time
 
                 # Fetch and process the block range
                 rows_loaded = fetch_and_process_range(
                     block_range[0], block_range[1], self.chain, node_connection,
                     self.table_name, self.bucket_name,
-                    self.db_connector, rpc_config['url']
+                    self.db_connector, rpc_url
                 )
 
                 # Calculate time taken for this block range
                 time_taken = time.time() - start_time
 
-                # Update RPC stats
-                self.update_rpc_stats(rpc_config['url'], rows_loaded, time_taken)
+                # Clean up timeout tracking for this block range
+                if rpc_url in self.rpc_timeouts and block_range_key in self.rpc_timeouts[rpc_url]:
+                    del self.rpc_timeouts[rpc_url][block_range_key]
 
-                print(f"SUCCESS: Processed block range {block_range[0]}-{block_range[1]} from {rpc_config['url']}. "
+                # Update RPC stats
+                self.update_rpc_stats(rpc_url, rows_loaded, time_taken)
+
+                print(f"SUCCESS: Processed block range {block_range_key} from {rpc_url}. "
                     f"Rows loaded: {rows_loaded}, Time taken: {time_taken:.2f}s")
 
             except Empty:
                 print("DONE: no more blocks to process. Worker is shutting down.")
                 return
             except Exception as e:
+                # Clean up timeout tracking for this block range on error
+                if block_range and rpc_url in self.rpc_timeouts and block_range_key in self.rpc_timeouts[rpc_url]:
+                    del self.rpc_timeouts[rpc_url][block_range_key]
+                
                 with error_lock:
                     rpc_errors[rpc_config['url']] += 1  # Increment error count
                     # Check immediately if the RPC should be removed
                     if rpc_errors[rpc_config['url']] >= len([rpc['workers'] for rpc in self.rpc_configs if rpc['url'] == rpc_config['url']]):
                         print(f"All workers for {rpc_config['url']} failed. Removing this RPC from rotation.")
                         self.rpc_configs = [rpc for rpc in self.rpc_configs if rpc['url'] != rpc_config['url']]
-                        self.active_rpcs.remove(rpc_config['url'])
-                print(f"ERROR: for {rpc_config['url']} on block range {block_range[0]}-{block_range[1]}: {e}")
-                block_range_queue.put(block_range)  # Re-queue the failed block range
-                print(f"RE-QUEUED: block range {block_range[0]}-{block_range[1]}")
+                        self.active_rpcs.discard(rpc_config['url'])
+                        # Clean up timeout tracking for this RPC
+                        if rpc_config['url'] in self.rpc_timeouts:
+                            del self.rpc_timeouts[rpc_config['url']]
+                            
+                if block_range:
+                    print(f"ERROR: for {rpc_config['url']} on block range {block_range[0]}-{block_range[1]}: {e}")
+                    block_range_queue.put(block_range)  # Re-queue the failed block range
+                    print(f"RE-QUEUED: block range {block_range[0]}-{block_range[1]}")
                 break
             finally:
                 if block_range:

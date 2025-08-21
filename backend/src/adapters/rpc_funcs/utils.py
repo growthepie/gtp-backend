@@ -1171,8 +1171,8 @@ def fetch_and_process_range(current_start, current_end, chain, w3, table_name, b
         except Exception as e:
             print(f"ERROR: {rpc_url} - processing blocks {current_start} to {current_end}: {e}")
             base_wait_time = handle_retry_exception(current_start, current_end, base_wait_time, rpc_url)
-            # Check if elapsed time exceeds 5 minutes
-            if elapsed_time >= 300:
+            # Check if elapsed time exceeds 15 minutes (extended since we handle RPC-level timeouts separately)
+            if elapsed_time >= 900:
                 raise MaxWaitTimeExceededException(f"For {rpc_url}: Maximum wait time exceeded for blocks {current_start} to {current_end}")
 
 def get_chain_config(db_connector, chain_name):
