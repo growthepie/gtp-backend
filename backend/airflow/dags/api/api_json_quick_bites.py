@@ -186,6 +186,12 @@ def json_creation():
             df = execute_jinja_query(db_connector, "api/select_fact_kpis.sql.j2", query_parameters, return_df=True)
             df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC')
             df.sort_values(by=['date'], inplace=True, ascending=True)
+            
+            ## fill missing dates with 0
+            df_all_dates = pd.DataFrame({'date': pd.date_range(start=df['date'].min(), end=df['date'].max(), freq='D')})
+            df = pd.merge(df_all_dates, df, on='date', how='left')
+            df['value'] = df['value'].fillna(0)  # Fill NaN values with 0
+            
             df['unix'] = df['date'].apply(lambda x: x.timestamp() * 1000)
             df = df.drop(columns=['date'])
                 

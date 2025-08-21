@@ -110,6 +110,13 @@ rpc_config = {
         "sleeper": 3,
         "calc_fees": True,
     },
+    "katana": {
+        "name": "Katana",
+        "processors": "evm",
+        "stack": "op_stack",
+        "sleeper": 3,
+        "calc_fees": False,
+    },
     
     ## Nitro/Arbitrum Orbit chains
     "arbitrum": {

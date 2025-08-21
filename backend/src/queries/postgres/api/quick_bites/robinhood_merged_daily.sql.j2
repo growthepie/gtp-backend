@@ -1,7 +1,7 @@
 WITH date_range AS (
   SELECT generate_series(
     (SELECT MIN(date) FROM public.robinhood_daily),
-    (SELECT MAX(date) FROM public.robinhood_daily),
+    CURRENT_DATE - INTERVAL '1 day',
     '1 day'::interval
   )::date as date
 ),

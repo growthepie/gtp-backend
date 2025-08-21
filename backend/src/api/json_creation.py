@@ -1118,7 +1118,7 @@ class JSONCreation():
                 'chain_type': chain.chain_type,
                 'caip2': self.db_connector.get_chain_info(origin_key, 'caip2'),
                 'evm_chain_id': chain.evm_chain_id,
-                'active_tabs': chain.api_active_tabs,
+                'tab_status': chain.api_tab_status,
                 'deployment': chain.api_deployment_flag,
                 'name_short': chain.name_short,
                 'company': chain.company,

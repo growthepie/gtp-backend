@@ -35,7 +35,7 @@ class MainConfig(BaseModel):
     api_in_apps: Optional[bool] = Field(alias="api_in_api_apps", default=None)
     api_deployment_flag: Optional[str] = Field(alias="api_api_deployment_flag", default=None)
     api_exclude_metrics: Optional[List[str]] = Field(alias="api_api_exclude_metrics", default=None)
-    api_active_tabs: Optional[List[str]] = Field(alias="api_active_tabs", default=None)
+    api_tab_status: Optional[dict] = Field(alias="api_tab_status", default=None)
 
     ## ALIASES
     aliases_l2beat: Optional[str] = Field(alias="aliases_l2beat", default=None)

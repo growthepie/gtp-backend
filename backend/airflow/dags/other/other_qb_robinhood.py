@@ -4,9 +4,11 @@ import getpass
 sys_user = getpass.getuser()
 sys.path.append(f"/home/{sys_user}/gtp/backend/")
 
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta,timezone
 from airflow.decorators import dag, task 
 from src.misc.airflow_utils import alert_via_webhook
+from airflow.operators.empty import EmptyOperator
+from airflow.utils.trigger_rule import TriggerRule
 
 @dag(
     default_args={
@@ -20,10 +22,30 @@ from src.misc.airflow_utils import alert_via_webhook
     description='Data for Robinhood stock tracker.',
     tags=['other'],
     start_date=datetime(2025,7,22),
-    schedule='12 1 * * 2-6'
+    schedule='12 1 * * *' # Every day at 01:12
 )
 
 def run_dag():
+
+    @task.branch(task_id="decide_branch")
+    def decide_branch():
+        """Decide which branch to execute based on the day of the week"""
+        # Use current UTC time
+        current_utc = datetime.now(timezone.utc)
+        day_of_week = current_utc.weekday()
+        
+        print(f"Current UTC time: {current_utc}")
+        
+        if day_of_week in [6, 0]:  # Sunday or Monday
+            print("Choosing json_only_branch")
+            return 'json_only_branch'
+        else:  # Tuesday through Saturday
+            print("Choosing full_pipeline_branch")
+            return 'full_pipeline_branch'
+
+    # Empty operators for branching
+    json_only_branch = EmptyOperator(task_id='json_only_branch')
+    full_pipeline_branch = EmptyOperator(task_id='full_pipeline_branch')
 
     @task()
     def pull_data_from_dune():      
@@ -106,7 +128,7 @@ def run_dag():
         df = yfi.extract(load_params)
         yfi.load(df)
 
-    @task()
+    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
     def create_json_file():
         import pandas as pd
         import os
@@ -315,11 +337,47 @@ def run_dag():
         from src.misc.helper_functions import empty_cloudfront_cache
         empty_cloudfront_cache(cf_distribution_id, '/v1/quick-bites/robinhood/*')
     
-    # all tasks
-    pull_dune = pull_data_from_dune()  ## read in contracts from airtable and attest
-    pull_yfinance = pull_data_from_yfinance() ## read in approved labels from airtable and attest 
-    create_jsons = create_json_file() ## read in remap owner project from airtable and attest
+    # temporary to be removed once Phase 2 launches
+    @task()
+    def notification_in_case_of_transfer():
+        from src.db_connector import DbConnector
+        db_connector = DbConnector()
+        # Implement notification logic here
+        df = db_connector.execute_query(
+        """
+        WITH latest_date AS (
+            SELECT MAX(date) as max_date
+            FROM public.robinhood_daily
+            WHERE metric_key = 'total_transferred'
+        )
+        SELECT 
+            contract_address, 
+            "date", 
+            metric_key, 
+            value
+        FROM public.robinhood_daily rd
+        JOIN latest_date ld ON rd.date = ld.max_date
+        WHERE metric_key = 'total_transferred'
+            AND value != 0
+        ORDER BY value DESC;
+        """, load_df=True)
+        if df.empty == False:
+            from src.misc.helper_functions import send_discord_message
+            import os
+            send_discord_message("Robinhood transfers detected (Phase 2 launched?) <@790276642660548619>", webhook_url=os.getenv("DISCORD_ALERTS"))
+
+    # Create task instances
+    branch_task = decide_branch()
+    pull_dune = pull_data_from_dune()
+    pull_yfinance = pull_data_from_yfinance() 
+    create_jsons = create_json_file()
+    alert_system = notification_in_case_of_transfer()
+
+    # Define execution order with branching
+    branch_task >> [json_only_branch, full_pipeline_branch]
     
-    # Define execution order
-    pull_dune >> pull_yfinance >> create_jsons
+    # Both branches lead to create_json_file
+    json_only_branch >> create_jsons
+    full_pipeline_branch >> pull_dune >> pull_yfinance >> alert_system >> create_jsons
+
 run_dag()
