@@ -9,6 +9,7 @@ from requests.exceptions import HTTPError
 from src.adapters.abstract_adapters import AbstractAdapter
 from src.misc.helper_functions import print_init, print_load, print_extract
 from src.stables_config import stables_metadata, stables_mapping
+from sqlalchemy import text
 
 ## TODO: add days 'auto' functionality. if blocks are missing, fetch all. If tokens are missing, fetch all
 ## This should also work for new tokens being added etc
@@ -1060,6 +1061,114 @@ class AdapterStablecoinSupply(AbstractAdapter):
             df_main = pd.DataFrame(columns=['metric_key', 'origin_key', 'date', 'token_key', 'value']).set_index(['metric_key', 'origin_key', 'date', 'token_key'])
         return df_main
     
+    def get_exchange_rates(self, currencies, target_date=None):
+        """
+        Get exchange rates for specified currencies from fact_kpis table.
+        
+        Args:
+            currencies (list): List of currency codes (e.g., ['eur', 'brl'])
+            target_date (str, optional): Specific date to get rates for. If None, gets latest rates.
+            
+        Returns:
+            dict: Currency code -> exchange rate mapping
+        """
+        if not currencies:
+            return {}
+            
+        rates = {}
+        
+        try:
+            with self.db_connector.engine.connect() as conn:
+                for currency in currencies:
+                    if currency == 'usd':
+                        rates[currency] = 1.0
+                        continue
+                        
+                    origin_key = f'fiat_{currency}'
+                    
+                    if target_date:
+                        # Get rate for specific date
+                        query = text("""
+                            SELECT value 
+                            FROM fact_kpis 
+                            WHERE metric_key = 'price_usd' 
+                              AND origin_key = :origin_key 
+                              AND date = :target_date
+                            ORDER BY date DESC
+                            LIMIT 1
+                        """)
+                        result = conn.execute(query, {
+                            'origin_key': origin_key,
+                            'target_date': target_date
+                        })
+                    else:
+                        # Get latest rate
+                        query = text("""
+                            SELECT value 
+                            FROM fact_kpis 
+                            WHERE metric_key = 'price_usd' 
+                              AND origin_key = :origin_key
+                            ORDER BY date DESC
+                            LIMIT 1
+                        """)
+                        result = conn.execute(query, {'origin_key': origin_key})
+                    
+                    row = result.fetchone()
+                    if row:
+                        rates[currency] = float(row[0])
+                        print(f"Found exchange rate for {currency.upper()}: {rates[currency]:.6f}")
+                    else:
+                        print(f"Warning: No exchange rate found for {currency.upper()}, skipping conversion")
+                        rates[currency] = None
+                        
+        except Exception as e:
+            print(f"Error fetching exchange rates: {e}")
+            # Return None for all currencies to indicate failure
+            return {currency: None for currency in currencies}
+            
+        return rates
+    
+    def convert_to_usd(self, df, exchange_rates):
+        """
+        Convert non-USD stablecoin values to USD using exchange rates.
+        
+        Args:
+            df (pd.DataFrame): DataFrame with stablecoin data including token_key
+            exchange_rates (dict): Currency -> exchange rate mapping
+            
+        Returns:
+            pd.DataFrame: DataFrame with USD-converted values
+        """
+        if df.empty or not exchange_rates:
+            return df
+            
+        # Create a copy to avoid modifying original data
+        df_converted = df.copy()
+        
+        # Get unique dates for rate lookup
+        dates = df_converted['date'].unique() if 'date' in df_converted.columns else [None]
+        
+        for idx, row in df_converted.iterrows():
+            token_key = row.get('token_key')
+            if not token_key or token_key not in self.stables_metadata:
+                continue
+                
+            # Get the fiat currency for this stablecoin
+            fiat_currency = self.stables_metadata[token_key].get('fiat', 'usd')
+            
+            if fiat_currency != 'usd':
+                # Convert to USD using exchange rate
+                exchange_rate = exchange_rates.get(fiat_currency)
+                if exchange_rate is not None:
+                    original_value = row['value']
+                    converted_value = original_value * exchange_rate
+                    df_converted.at[idx, 'value'] = converted_value
+                    print(f"Converted {token_key} ({fiat_currency.upper()}): {original_value:.2f} -> {converted_value:.2f} USD (rate: {exchange_rate:.6f})")
+                else:
+                    print(f"Warning: Cannot convert {token_key} - no exchange rate for {fiat_currency.upper()}")
+                    
+        return df_converted
+    
     def get_total_supply(self, days=None):
         """
         Calculate the total stablecoin supply (bridged + direct - locked) per chain
@@ -1068,8 +1177,9 @@ class AdapterStablecoinSupply(AbstractAdapter):
         1. Retrieves bridged supply data from Ethereum bridge contracts
         2. Retrieves direct supply data from L2 native tokens
         3. Retrieves locked supply data from treasury contracts
-        4. Combines them to get total stablecoin supply by chain and stablecoin
-        5. Also calculates a total across all stablecoins for each chain
+        4. Applies currency conversion for non-USD stablecoins
+        5. Combines them to get total stablecoin supply by chain and stablecoin
+        6. Also calculates a total across all stablecoins for each chain
         """
 
         days = days if days is not None else 9999
@@ -1132,6 +1242,43 @@ class AdapterStablecoinSupply(AbstractAdapter):
             print("No data available for total supply calculation")
             # Return empty dataframe with correct structure
             return pd.DataFrame(columns=['metric_key', 'origin_key', 'date', 'token_key', 'value']).set_index(['metric_key', 'origin_key', 'date', 'token_key'])
+        
+        # Apply currency conversion for non-USD stablecoins
+        print("Checking for non-USD stablecoins to convert...")
+        
+        # Reset index to work with the dataframe
+        df_reset = df.reset_index()
+        
+        # Find all unique non-USD currencies that need conversion
+        non_usd_currencies = set()
+        if 'token_key' in df_reset.columns:
+            for token_key in df_reset['token_key'].unique():
+                if token_key and token_key in self.stables_metadata:
+                    fiat = self.stables_metadata[token_key].get('fiat', 'usd')
+                    if fiat != 'usd':
+                        non_usd_currencies.add(fiat)
+        
+        if non_usd_currencies:
+            print(f"Found non-USD stablecoins with currencies: {list(non_usd_currencies)}")
+            
+            # Get exchange rates for non-USD currencies
+            exchange_rates = self.get_exchange_rates(list(non_usd_currencies))
+            
+            if any(rate is not None for rate in exchange_rates.values()):
+                print("Applying currency conversion to stablecoin values...")
+                df_reset = self.convert_to_usd(df_reset, exchange_rates)
+                
+                # Set index back
+                if 'token_key' in df_reset.columns:
+                    df = df_reset.set_index(['metric_key', 'origin_key', 'date', 'token_key'])
+                else:
+                    df = df_reset.set_index(['metric_key', 'origin_key', 'date'])
+            else:
+                print("Warning: No valid exchange rates found, using original values")
+                df = df_reset.set_index(['metric_key', 'origin_key', 'date', 'token_key'])
+        else:
+            print("No non-USD stablecoins found, no conversion needed")
+            df = df_reset.set_index(['metric_key', 'origin_key', 'date', 'token_key'])
         
         # Also create total across all stablecoins
         df_total = df.groupby(['origin_key', 'date'])['value'].sum().reset_index()
