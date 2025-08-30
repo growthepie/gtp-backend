@@ -1,0 +1,23 @@
+-- This query efficiently fetches the single latest value for each chain (origin_key)
+-- for a given list of metrics. It uses PostgreSQL's DISTINCT ON for performance, which
+-- is ideal for this "greatest-n-per-group" problem where n=1.
+
+SELECT DISTINCT ON (origin_key, metric_key)
+    origin_key,
+    metric_key,
+    "date",
+    value
+FROM
+    public.fact_kpis
+WHERE
+    -- The Jinja template will expand the list of metric keys here.
+    metric_key IN ({% for key in metric_keys %}'{{ key }}'{{ ',' if not loop.last }}{% endfor %})
+    AND
+    -- Exclude future-dated values, just in case, except for market cap which might be current.
+    "date" <= CURRENT_DATE
+ORDER BY
+    -- The ORDER BY clause is crucial for DISTINCT ON. It ensures that the row kept
+    -- is the one with the most recent date for each origin_key/metric_key pair.
+    origin_key,
+    metric_key,
+    "date" DESC;

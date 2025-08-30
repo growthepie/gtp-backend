@@ -1,0 +1,27 @@
+{#
+    A query to get the data from the fact_kpis tabe
+
+    Parameters:
+    - days: default = 30; The time interval (in days) to consider for data extraction.
+    - metric_key: The metric key to consider for data extraction.
+    - orgin_key: The origin key to consider for data extraction.
+#}
+
+{% set days = days | default(30) %}
+
+SELECT 
+    origin_key,
+    metric_key,
+    fk."date",
+    fk.value
+FROM public.fact_kpis fk
+WHERE 
+     -- Filter for the specific chains provided in the list.
+    origin_key IN ({% for key in origin_keys %}'{{ key }}'{{ ',' if not loop.last }}{% endfor %})
+
+    -- Filter for the specific metrics provided in the list.
+    AND metric_key IN ({% for key in metric_keys %}'{{ key }}'{{ ',' if not loop.last }}{% endfor %})
+
+    AND fk."date" >= current_date - INTERVAL '{{ days }} days' 
+    AND fk."date" < current_date
+ORDER BY fk."date" DESC
