@@ -783,46 +783,4 @@ async def main():
     
     try:
         await server.initialize()
-        app = await create_app(server)
-        
-        update_task = asyncio.create_task(server.data_update_loop())
-        maintenance_task = asyncio.create_task(server.periodic_maintenance_loop())
-        
-        logger.info(f"🚀 Starting SSE server on {config.server_host}:{config.server_port}")
-        logger.info(f"📡 SSE endpoint: /events")
-        logger.info(f"🏥 Health check: /health")
-        logger.info(f"📈 Global API: /api/data")
-        logger.info(f"📊 Global History: /api/history")
-        logger.info(f"⛓️ Chain Data: /api/chain/{{chain_name}}")
-        logger.info(f"📜 Chain History: /api/chain/{{chain_name}}/history")
-        logger.info(f"🎉 Chain Events: /api/chain/{{chain_name}}/events")
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, config.server_host, config.server_port)
-        await site.start()
-
-        try:
-            await asyncio.Future()
-        except KeyboardInterrupt:
-            logger.info("🛑 Received shutdown signal")
-        finally:
-            logger.info("🧹 Cleaning up...")
-            update_task.cancel()
-            maintenance_task.cancel()
-            await server.close()
-            await runner.cleanup()
-            logger.info("✅ Shutdown complete")
-            
-    except Exception as e:
-        logger.error(f"❌ Fatal error: {str(e)}")
-        raise
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Server shutdown requested by user")
-    except Exception as e:
-        print(f"💥 Fatal error: {e}")
-        exit(1)
+        app = await
