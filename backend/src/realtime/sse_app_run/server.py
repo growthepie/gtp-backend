@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Set, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import requests
 import os
 
@@ -23,13 +23,16 @@ def send_discord_message(message, webhook_url=None):
     data = {"content": message}
     if webhook_url is None:
         webhook_url = os.getenv('DISCORD_COMMS')
-    response = requests.post(webhook_url, json=data)
+    try:
+        response = requests.post(webhook_url, json=data, timeout=10)
+        # Check the response status code
+        if response.status_code == 204:
+            print("Message sent successfully")
+        else:
+            print(f"Error sending message: {response.status_code} - {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending Discord message: {e}")
 
-    # Check the response status code
-    if response.status_code == 204:
-        print("Message sent successfully")
-    else:
-        print(f"Error sending message: {response.text}")
 
 @dataclass
 class ServerConfig:
@@ -43,8 +46,8 @@ class ServerConfig:
     update_interval: int = 1
     heartbeat_interval: int = 30
     max_history_events: int = 20
-    cleanup_interval_ms: int = 60000  # 1 minute
-    max_connections: int = 500  # Connection limit
+    cleanup_interval_ms: int = 60000
+    max_connections: int = 500
 
     @classmethod
     def from_env(cls) -> 'ServerConfig':
@@ -64,21 +67,41 @@ class TPSRecord:
     value: float
     timestamp: str
     timestamp_ms: int
-    chain_breakdown: Dict[str, float]
-    total_chains: int
-    active_chains: int
+    chain_breakdown: Dict[str, float] = field(default_factory=dict)
+    total_chains: int = 0
+    active_chains: int = 0
     is_ath: bool = False
+    chain_name: Optional[str] = None
 
 class RedisKeys:
     """Redis key constants."""
+    # Global keys
     GLOBAL_TPS_ATH = "global:tps:ath"
     GLOBAL_TPS_24H = "global:tps:24h_high"
     TPS_HISTORY_24H = "global:tps:history_24h"
     ATH_HISTORY = "global:tps:ath_history"
-    
+
     @staticmethod
     def chain_stream(chain_name: str) -> str:
         return f"chain:{chain_name}"
+
+    # Chain-specific metric keys
+    @staticmethod
+    def chain_tps_ath(chain_name: str) -> str:
+        return f"chain:{chain_name}:tps:ath"
+
+    @staticmethod
+    def chain_tps_24h(chain_name: str) -> str:
+        return f"chain:{chain_name}:tps:24h_high"
+    
+    @staticmethod
+    def chain_tps_history_24h(chain_name: str) -> str:
+        return f"chain:{chain_name}:tps:history_24h"
+    
+    @staticmethod
+    def chain_ath_history(chain_name: str) -> str:
+        return f"chain:{chain_name}:tps:ath_history"
+
 
 class RedisSSEServer:
     """SSE Server that reads blockchain data from Redis streams."""
@@ -90,31 +113,26 @@ class RedisSSEServer:
         self.latest_data: Dict[str, Any] = {}
         self.global_metrics: Dict[str, Any] = {}
         
-        # TPS tracking
+        # Global TPS tracking
         self.tps_ath: float = 0.0
         self.tps_ath_timestamp: str = ""
         self.tps_24h_high: float = 0.0
         self.tps_24h_high_timestamp: str = ""
         
-        # Chain caching (Optimization #6)
+        # Per-chain TPS tracking
+        self.chain_metrics: Dict[str, Dict[str, Any]] = {}
+        
         self._chain_cache: Optional[List[str]] = None
         self._chain_cache_time: Optional[datetime] = None
-        self._cache_ttl = 60  # 1 minute
+        self._cache_ttl = 60
 
-    # Safe parsing helpers (Optimization #4)
     def _safe_float(self, value, default=0.0):
-        """Safely convert to float with fallback."""
-        try:
-            return float(value) if value is not None else default
-        except (ValueError, TypeError):
-            return default
+        try: return float(value) if value is not None else default
+        except (ValueError, TypeError): return default
 
     def _safe_int(self, value, default=0):
-        """Safely convert to int with fallback."""
-        try:
-            return int(value) if value is not None else default
-        except (ValueError, TypeError):
-            return default
+        try: return int(value) if value is not None else default
+        except (ValueError, TypeError): return default
         
     async def initialize(self):
         """Initialize Redis connection and load existing TPS records."""
@@ -123,12 +141,9 @@ class RedisSSEServer:
                 "host": self.config.redis_host,
                 "port": self.config.redis_port,
                 "db": self.config.redis_db,
-                "decode_responses": True,
-                "socket_keepalive": True,
-                "retry_on_timeout": True,
-                "health_check_interval": 30,
+                "decode_responses": True, "socket_keepalive": True,
+                "retry_on_timeout": True, "health_check_interval": 30,
             }
-            
             if self.config.redis_password:
                 redis_params["password"] = self.config.redis_password
                 
@@ -136,16 +151,16 @@ class RedisSSEServer:
             await self.redis_client.ping()
             logger.info(f"✅ Connected to Redis at {self.config.redis_host}:{self.config.redis_port}")
             
-            await self._load_tps_records()
+            await self._load_global_tps_records()
+            await self._load_all_chain_metrics()
             
         except Exception as e:
             logger.error(f"❌ Failed to connect to Redis: {str(e)}")
             raise
     
-    async def _load_tps_records(self):
-        """Load existing TPS ATH and 24hr high from Redis using pipeline (Optimization #1)."""
+    async def _load_global_tps_records(self):
+        """Load existing GLOBAL TPS ATH and 24hr high from Redis."""
         try:
-            # Use pipeline for batch operations
             pipe = self.redis_client.pipeline()
             pipe.hgetall(RedisKeys.GLOBAL_TPS_ATH)
             pipe.hgetall(RedisKeys.GLOBAL_TPS_24H)
@@ -156,47 +171,77 @@ class RedisSSEServer:
             if ath_data:
                 self.tps_ath = self._safe_float(ath_data.get("value", 0))
                 self.tps_ath_timestamp = ath_data.get("timestamp", "")
-                logger.info(f"📈 Loaded TPS ATH: {self.tps_ath} (set at {self.tps_ath_timestamp})")
+                logger.info(f"📈 Loaded Global TPS ATH: {self.tps_ath}")
             
             if h24_data:
                 self.tps_24h_high = self._safe_float(h24_data.get("value", 0))
                 self.tps_24h_high_timestamp = h24_data.get("timestamp", "")
-                logger.info(f"📊 Loaded 24hr TPS High: {self.tps_24h_high} (set at {self.tps_24h_high_timestamp})")
+                logger.info(f"📊 Loaded Global 24hr TPS High: {self.tps_24h_high}")
             
             await self._cleanup_24h_history()
             
         except Exception as e:
-            logger.error(f"Error loading TPS records: {str(e)}")
+            logger.error(f"Error loading global TPS records: {str(e)}")
+
+    async def _load_all_chain_metrics(self):
+        """Load ATH and 24h high for all chains from Redis concurrently."""
+        logger.info("Loading historical metrics for all chains...")
+        chains = await self._get_all_chains()
+        
+        async def fetch_metrics(chain_name):
+            try:
+                pipe = self.redis_client.pipeline()
+                pipe.hgetall(RedisKeys.chain_tps_ath(chain_name))
+                pipe.hgetall(RedisKeys.chain_tps_24h(chain_name))
+                ath_data, h24_data = await pipe.execute()
+                
+                self.chain_metrics[chain_name] = {
+                    "ath": self._safe_float(ath_data.get("value", 0)) if ath_data else 0,
+                    "ath_timestamp": ath_data.get("timestamp", "") if ath_data else "",
+                    "24h_high": self._safe_float(h24_data.get("value", 0)) if h24_data else 0,
+                    "24h_high_timestamp": h24_data.get("timestamp", "") if h24_data else ""
+                }
+            except Exception as e:
+                logger.warning(f"Could not load metrics for chain {chain_name}: {e}")
+
+        tasks = [fetch_metrics(chain) for chain in chains]
+        await asyncio.gather(*tasks)
+        logger.info(f"✅ Loaded metrics for {len(self.chain_metrics)} chains.")
     
     async def _cleanup_24h_history(self):
-        """Remove TPS history entries older than 24 hours."""
+        """Remove TPS history entries older than 24 hours for global and all chains."""
         try:
             cutoff_time = int((datetime.now() - timedelta(hours=24)).timestamp() * 1000)
-            removed = await self.redis_client.zremrangebyscore(
-                RedisKeys.TPS_HISTORY_24H, 0, cutoff_time
-            )
-            if removed > 0:
-                logger.debug(f"🧹 Cleaned up {removed} old TPS history entries")
+            
+            pipe = self.redis_client.pipeline()
+            # Global cleanup
+            pipe.zremrangebyscore(RedisKeys.TPS_HISTORY_24H, 0, cutoff_time)
+            
+            # Per-chain cleanup
+            chains = await self._get_all_chains()
+            for chain_name in chains:
+                pipe.zremrangebyscore(RedisKeys.chain_tps_history_24h(chain_name), 0, cutoff_time)
+
+            results = await pipe.execute()
+            removed_global = results[0]
+            if removed_global > 0:
+                logger.debug(f"🧹 Cleaned up {removed_global} old GLOBAL TPS history entries")
+
         except Exception as e:
             logger.error(f"Error cleaning up 24hr history: {str(e)}")
 
     async def _periodic_maintenance(self):
         """Combined maintenance: refresh 24h high and cleanup old data."""
         try:
-            # Batch both operations in a single pipeline for efficiency
             now_ms = int(datetime.now().timestamp() * 1000)
             min_ts = now_ms - 24 * 60 * 60 * 1000
-            cutoff_time = min_ts  # Same cutoff for both operations
-
-            # Get 24h entries for refresh
+            
+            # Refresh Global 24h High
             entries = await self.redis_client.zrangebyscore(
                 RedisKeys.TPS_HISTORY_24H, min_ts, now_ms
             )
-
-            # Find max TPS from valid entries
             max_tps = 0
             max_entry = None
-
             for raw in entries:
                 try:
                     data = json.loads(raw)
@@ -204,40 +249,20 @@ class RedisSSEServer:
                     if tps > max_tps:
                         max_tps = tps
                         max_entry = data
-                except Exception:
-                    continue
+                except Exception: continue
 
-            # Batch all Redis operations
-            pipe = self.redis_client.pipeline()
-            operations = []
-
-            # Update 24h high if we found a max entry
             if max_entry:
-                pipe.hset(RedisKeys.GLOBAL_TPS_24H, mapping={
-                    "value": str(max_tps),
-                    "timestamp": max_entry["timestamp"],
+                await self.redis_client.hset(RedisKeys.GLOBAL_TPS_24H, mapping={
+                    "value": str(max_tps), "timestamp": max_entry["timestamp"],
                     "timestamp_ms": max_entry["timestamp_ms"]
                 })
-                operations.append("24h refresh")
-
-            # Cleanup old entries (older than 24h) - ONLY TPS history, NOT ATH
-            pipe.zremrangebyscore(RedisKeys.TPS_HISTORY_24H, 0, cutoff_time)
-            operations.append("24h cleanup")
-
-            # Execute all operations at once
-            results = await pipe.execute()
-            
-            # Update in-memory values if 24h high was refreshed
-            if max_entry:
                 self.tps_24h_high = max_tps
                 self.tps_24h_high_timestamp = max_entry["timestamp"]
-                logger.info(f"♻️ Refreshed 24h TPS high: {max_tps} TPS")
 
-            # Log cleanup results
-            if len(results) >= 2:
-                removed_24h = results[-1]
-                if removed_24h > 0:
-                    logger.debug(f"🧹 Cleaned up {removed_24h} old TPS entries")
+            # Cleanup
+            await self._cleanup_24h_history()
+            
+            logger.info("♻️ Periodic maintenance complete (24h high refresh & history cleanup).")
 
         except Exception as e:
             logger.error(f"Error in periodic maintenance: {str(e)}")
@@ -247,54 +272,121 @@ class RedisSSEServer:
         breakdown = {}
         for chain_name, data in chain_data.items():
             if isinstance(data, dict) and "tps" in data:
-                tps_value = self._safe_float(data.get("tps", 0))  # OPTIMIZED: Safe parsing
+                tps_value = self._safe_float(data.get("tps", 0))
                 if tps_value > 0:
                     breakdown[chain_name] = tps_value
         return breakdown
     
-    async def _store_tps_record(self, record: TPSRecord):
-        """Store TPS record in Redis using pipeline (Optimization #1)."""
+    async def _store_global_tps_record(self, record: TPSRecord):
+        """Store a GLOBAL TPS record in Redis."""
         try:
             history_entry = {
-                "tps": str(record.value),
-                "timestamp": record.timestamp,
-                "timestamp_ms": str(record.timestamp_ms),
-                "chain_breakdown": json.dumps(record.chain_breakdown),
-                "total_chains": str(record.total_chains),
-                "active_chains": str(record.active_chains),
-                "is_ath": str(record.is_ath)
+                "tps": record.value, "timestamp": record.timestamp,
+                "timestamp_ms": record.timestamp_ms,
+                "chain_breakdown": record.chain_breakdown,
+                "total_chains": record.total_chains, "active_chains": record.active_chains,
+                "is_ath": record.is_ath
             }
-            
-            # Batch operations in pipeline
             pipe = self.redis_client.pipeline()
+            entry_json = json.dumps(history_entry)
+            if record.is_ath:
+                pipe.zadd(RedisKeys.ATH_HISTORY, {entry_json: record.timestamp_ms})
+            pipe.zadd(RedisKeys.TPS_HISTORY_24H, {entry_json: record.timestamp_ms})
+            await pipe.execute()
+        except Exception as e:
+            logger.error(f"Error storing global TPS record: {str(e)}")
+    
+    async def _store_chain_tps_record(self, record: TPSRecord):
+        """Store a CHAIN-SPECIFIC TPS record in Redis."""
+        if not record.chain_name:
+            return
+        try:
+            history_entry = {
+                "tps": record.value, "timestamp": record.timestamp,
+                "timestamp_ms": record.timestamp_ms, "is_ath": record.is_ath
+            }
+            pipe = self.redis_client.pipeline()
+            key_history = RedisKeys.chain_tps_history_24h(record.chain_name)
+            entry_json = json.dumps(history_entry)
             
             if record.is_ath:
-                pipe.zadd(
-                    RedisKeys.ATH_HISTORY,
-                    {json.dumps(history_entry): record.timestamp_ms}
-                )
-            
-            pipe.zadd(
-                RedisKeys.TPS_HISTORY_24H,
-                {json.dumps(history_entry): record.timestamp_ms}
-            )
-            
-            await pipe.execute()
-            
-        except Exception as e:
-            logger.error(f"Error storing TPS record: {str(e)}")
+                key_ath_history = RedisKeys.chain_ath_history(record.chain_name)
+                pipe.zadd(key_ath_history, {entry_json: record.timestamp_ms})
 
-    async def _update_tps_records(self, current_tps: float, timestamp: str, chain_data: Dict[str, Any]):
-        """Update TPS ATH and 24hr high records if new highs are reached (Optimization #1)."""
+            pipe.zadd(key_history, {entry_json: record.timestamp_ms})
+            await pipe.execute()
+        except Exception as e:
+            logger.error(f"Error storing TPS record for chain {record.chain_name}: {str(e)}")
+
+    async def _update_all_chain_records(self, chain_data: Dict[str, Any]):
+        """Update ATH and 24h high records for each individual chain."""
+        now = datetime.now()
+        timestamp = now.isoformat()
+        timestamp_ms = int(now.timestamp() * 1000)
+
+        for chain_name, data in chain_data.items():
+            current_tps = self._safe_float(data.get("tps", 0))
+            if current_tps <= 0:
+                continue
+
+            metrics = self.chain_metrics.setdefault(chain_name, {
+                "ath": 0, "ath_timestamp": "", "24h_high": 0, "24h_high_timestamp": ""
+            })
+            
+            is_new_ath = current_tps > metrics.get("ath", 0)
+            
+            # Check if 24h high is expired or a new high
+            is_new_24h_high = False
+            last_24h_ts_str = metrics.get("24h_high_timestamp", "")
+            if last_24h_ts_str:
+                try:
+                    last_24h_dt = datetime.fromisoformat(last_24h_ts_str)
+                    if (now - last_24h_dt) > timedelta(hours=24):
+                       is_new_24h_high = True # Expired, so this is the new high
+                       metrics["24h_high"] = 0
+                except ValueError:
+                    is_new_24h_high = True # Invalid timestamp format
+            else: # No previous 24h high
+                is_new_24h_high = True
+
+            if not is_new_24h_high and current_tps > metrics.get("24h_high", 0):
+                is_new_24h_high = True
+            
+            pipe = self.redis_client.pipeline()
+            
+            if is_new_ath:
+                metrics["ath"] = current_tps
+                metrics["ath_timestamp"] = timestamp
+                pipe.hset(RedisKeys.chain_tps_ath(chain_name), mapping={
+                    "value": str(current_tps), "timestamp": timestamp, "timestamp_ms": str(timestamp_ms)
+                })
+                logger.info(f"🚀 NEW CHAIN ATH for {chain_name}: {current_tps} TPS!")
+
+            if is_new_24h_high:
+                metrics["24h_high"] = current_tps
+                metrics["24h_high_timestamp"] = timestamp
+                pipe.hset(RedisKeys.chain_tps_24h(chain_name), mapping={
+                    "value": str(current_tps), "timestamp": timestamp, "timestamp_ms": str(timestamp_ms)
+                })
+
+            if pipe:
+                await pipe.execute()
+            
+            # Store history record for the chain
+            record = TPSRecord(
+                chain_name=chain_name, value=current_tps, timestamp=timestamp,
+                timestamp_ms=timestamp_ms, is_ath=is_new_ath
+            )
+            await self._store_chain_tps_record(record)
+
+    async def _update_global_tps_records(self, current_tps: float, timestamp: str, chain_data: Dict[str, Any]):
+        """Update GLOBAL TPS ATH and 24hr high records."""
         try:
             current_timestamp_ms = int(datetime.now().timestamp() * 1000)
             chain_breakdown = self._extract_chain_breakdown(chain_data)
-
             is_new_ath = current_tps > self.tps_ath
 
-            # Batch all Redis operations in one pipeline
             pipe = self.redis_client.pipeline()
-            redis_operations = []
 
             if is_new_ath:
                 old_ath = self.tps_ath
@@ -302,76 +394,66 @@ class RedisSSEServer:
                 self.tps_ath_timestamp = timestamp
 
                 pipe.hset(RedisKeys.GLOBAL_TPS_ATH, mapping={
-                    "value": str(current_tps),
-                    "timestamp": timestamp,
-                    "timestamp_ms": str(current_timestamp_ms)
+                    "value": str(current_tps), "timestamp": timestamp, "timestamp_ms": str(current_timestamp_ms)
                 })
-                redis_operations.append("ATH update")
-
-                logger.info(f"🚀 NEW TPS ALL-TIME HIGH: {current_tps} TPS! (Previous: {old_ath})")
-                
-                ## send msg to Discord with ATH info
-                ath_message = f"""
-                🚀 NEW TPS ALL-TIME HIGH: {current_tps} TPS! (Previous: {old_ath})
-                \nTimestamp: {timestamp}\nActive Chains: {len(chain_breakdown)}\nChain Breakdown: {json.dumps(chain_breakdown, indent=2)}
-                """
+                logger.info(f"🚀 NEW GLOBAL TPS ALL-TIME HIGH: {current_tps} TPS! (Previous: {old_ath})")
+                ath_message = f"""🚀 NEW GLOBAL TPS ALL-TIME HIGH: {current_tps:.2f} TPS! (Previous: {old_ath:.2f})
+                \nTimestamp: {timestamp}\nActive Chains: {len(chain_breakdown)}\nChain Breakdown: {json.dumps(chain_breakdown, indent=2)}"""
                 send_discord_message(ath_message)
-                
 
-            # Check if current TPS is the new 24h high or if cached 24h high is expired
-            cached_24h_data = await self.redis_client.hgetall(RedisKeys.GLOBAL_TPS_24H)
-
-            last_tps = self._safe_float(cached_24h_data.get("value", "0")) if cached_24h_data else 0
-            last_ts_ms = self._safe_int(cached_24h_data.get("timestamp_ms", "0")) if cached_24h_data else 0
-
-            if current_timestamp_ms - last_ts_ms > 24 * 60 * 60 * 1000:
-                last_tps = 0  # Cache is outdated
-
-            if current_tps > last_tps:
+            if current_tps > self.tps_24h_high:
                 self.tps_24h_high = current_tps
                 self.tps_24h_high_timestamp = timestamp
                 pipe.hset(RedisKeys.GLOBAL_TPS_24H, mapping={
-                    "value": str(current_tps),
-                    "timestamp": timestamp,
-                    "timestamp_ms": str(current_timestamp_ms)
+                    "value": str(current_tps), "timestamp": timestamp, "timestamp_ms": str(current_timestamp_ms)
                 })
-                redis_operations.append("24h high update")
-                logger.info(f"📊 NEW 24HR TPS HIGH: {current_tps} TPS!")
-                
-                # ath_message = f"""
-                # 🚀 NEW TPS 24hr HIGH: {current_tps} TPS! (Previous: {self.tps_24h_high})
-                # \nTimestamp: {timestamp}\nActive Chains: {len(chain_breakdown)}\nChain Breakdown: {json.dumps(chain_breakdown, indent=2)}
-                # """
-                # send_discord_message(ath_message)
-            else:
-                self.tps_24h_high = last_tps
-                self.tps_24h_high_timestamp = cached_24h_data.get("timestamp", timestamp)
-
-            # Execute all batched operations
-            if redis_operations:
-                await pipe.execute()
+                logger.info(f"📊 NEW GLOBAL 24HR TPS HIGH: {current_tps} TPS!")
+            
+            if pipe: await pipe.execute()
 
             record = TPSRecord(
-                value=current_tps,
-                timestamp=timestamp,
-                timestamp_ms=current_timestamp_ms,
-                chain_breakdown=chain_breakdown,
-                total_chains=len(chain_data),
-                active_chains=len(chain_breakdown),
-                is_ath=is_new_ath
+                value=current_tps, timestamp=timestamp, timestamp_ms=current_timestamp_ms,
+                chain_breakdown=chain_breakdown, total_chains=len(chain_data),
+                active_chains=len(chain_breakdown), is_ath=is_new_ath
             )
-            await self._store_tps_record(record)
-
-            # record_type = "ATH" if is_new_ath else "New global TPS"
-            #logger.info(f"💾 Stored {record_type} history: {current_tps} TPS with {len(chain_breakdown)} chains")
-
-            # Periodic cleanup (reduced frequency since we have dedicated maintenance loop)
-            if current_timestamp_ms % (self.config.cleanup_interval_ms * 5) == 0:  # Every 5 minutes instead of 1
-                await self._cleanup_24h_history()
+            await self._store_global_tps_record(record)
 
         except Exception as e:
-            logger.error(f"Error updating TPS records: {str(e)}")
+            logger.error(f"Error updating global TPS records: {str(e)}")
+
+    async def _calculate_global_metrics(self, chain_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate global metrics from chain data."""
+        try:
+            await self._update_all_chain_records(chain_data)
+
+            tps_values = [self._safe_float(data.get("tps", 0)) for data in chain_data.values() if isinstance(data, dict)]
+            total_tps = sum(tps_values)
             
+            current_timestamp = datetime.now().isoformat()
+            if total_tps > 0:
+                await self._update_global_tps_records(total_tps, current_timestamp, chain_data)
+            
+            highest_tps = max(tps_values, default=0)
+            active_chains = sum(1 for tps in tps_values if tps > 0)
+            eth_data = chain_data.get("ethereum", {})
+            ethereum_tx_cost_usd = self._safe_float(eth_data.get("tx_cost_erc20_transfer_usd"))
+            ethereum_tx_cost_eth = self._safe_float(eth_data.get("tx_cost_erc20_transfer"))
+            l2_metrics = self._calculate_l2_metrics(chain_data)
+            
+            return {
+                "total_tps": round(total_tps, 1), "highest_tps": round(highest_tps, 1),
+                "highest_l2_cost_usd": l2_metrics["highest_cost_usd"],
+                "total_chains": len(chain_data), "active_chains": active_chains,
+                "ethereum_tx_cost_usd": ethereum_tx_cost_usd, "ethereum_tx_cost_eth": ethereum_tx_cost_eth,
+                "layer2s_tx_cost_usd": l2_metrics["avg_cost_usd"], "layer2s_tx_cost_eth": l2_metrics["avg_cost_eth"],
+                "total_tps_ath": round(self.tps_ath, 1), "total_tps_ath_timestamp": self.tps_ath_timestamp,
+                "total_tps_24h_high": round(self.tps_24h_high, 1), "total_tps_24h_high_timestamp": self.tps_24h_high_timestamp,
+                "last_updated": current_timestamp
+            }
+        except Exception as e:
+            logger.error(f"Error calculating global metrics: {str(e)}")
+            return {"error": str(e)}
+    
     async def periodic_maintenance_loop(self):
         """Combined maintenance loop: refresh 24h high and cleanup old data every 5 minutes."""
         logger.info("Starting periodic maintenance loop (every 5 minutes)")
@@ -380,7 +462,7 @@ class RedisSSEServer:
                 await self._periodic_maintenance()
             except Exception as e:
                 logger.error(f"Error in maintenance loop: {e}")
-            await asyncio.sleep(300)  # Every 5 minutes
+            await asyncio.sleep(300)
    
     async def close(self):
         """Close Redis connection."""
@@ -388,86 +470,57 @@ class RedisSSEServer:
             await self.redis_client.close()
     
     async def _get_all_chains(self) -> List[str]:
-        """Get all chain names from Redis with caching (Optimization #6)."""
+        """Get all chain names from Redis with caching."""
         now = datetime.now()
         
-        # Use cache if valid
         if (self._chain_cache and self._chain_cache_time and 
             (now - self._chain_cache_time).total_seconds() < self._cache_ttl):
             return self._chain_cache
         
         try:
-            chains = []
-            cursor = 0
-            
-            while True:
-                cursor, keys = await self.redis_client.scan(
-                    cursor=cursor, 
-                    match="chain:*", 
-                    count=100
-                )
-                
+            chains = set()
+            cursor = '0'
+            while cursor != 0:
+                cursor, keys = await self.redis_client.scan(cursor=cursor, match="chain:*", count=1000)
                 for key in keys:
-                    if isinstance(key, bytes):
-                        key = key.decode('utf-8')
-                    chain_name = key.replace("chain:", "")
-                    chains.append(chain_name)
-                
-                if cursor == 0:
-                    break
+                    if ":tps:" in key: continue # Filter out metric keys
+                    chain_name = key.split(':')[1]
+                    chains.add(chain_name)
             
-            # Update cache
-            self._chain_cache = chains
+            self._chain_cache = sorted(list(chains))
             self._chain_cache_time = now
-            return chains
+            return self._chain_cache
             
         except Exception as e:
             logger.error(f"Error getting chain keys: {str(e)}")
-            return self._chain_cache or []  # Return cached version on error
+            return self._chain_cache or []
     
     async def _get_latest_chain_data(self, chain_name: str) -> Dict[str, Any]:
-        """Get latest data for a specific chain from Redis stream with safe parsing (Optimization #4)."""
+        """Get latest data for a specific chain from Redis stream."""
         try:
             stream_key = RedisKeys.chain_stream(chain_name)
             entries = await self.redis_client.xrevrange(stream_key, count=1)
             
             if not entries:
-                return {
-                    "chain_name": chain_name,
-                    "display_name": chain_name,
-                    "tps": 0,
-                    "error": "No data available"
-                }
+                return {"chain_name": chain_name, "display_name": chain_name, "tps": 0, "error": "No data available"}
             
-            entry_id, fields = entries[0]
-            
-            # Safe parsing for all numeric fields
+            _entry_id, fields = entries[0]
             timestamp = self._safe_int(fields.get("timestamp", 0))
             
             return {
-                "chain_name": chain_name,
-                "display_name": fields.get("display_name", chain_name),
-                "tps": self._safe_float(fields.get("tps", 0)),
-                "timestamp": timestamp,
+                "chain_name": chain_name, "display_name": fields.get("display_name", chain_name),
+                "tps": self._safe_float(fields.get("tps", 0)), "timestamp": timestamp,
                 "tx_cost_erc20_transfer": self._safe_float(fields.get("tx_cost_erc20_transfer", 0)),
                 "tx_cost_erc20_transfer_usd": self._safe_float(fields.get("tx_cost_erc20_transfer_usd", 0)),
                 "last_updated": datetime.fromtimestamp(timestamp / 1000).isoformat() if timestamp else ""
             }
-            
         except Exception as e:
             logger.error(f"Error getting data for {chain_name}: {str(e)}")
-            return {
-                "chain_name": chain_name,
-                "display_name": chain_name,
-                "tps": 0,
-                "error": str(e)
-            }
-    
+            return {"chain_name": chain_name, "display_name": chain_name, "tps": 0, "error": str(e)}
+
     async def _get_all_chain_data(self) -> Dict[str, Any]:
-        """Get latest data for all chains concurrently (Optimization #2)."""
+        """Get latest data for all chains concurrently."""
         chains = await self._get_all_chains()
-        
-        # Fetch all chain data concurrently instead of sequentially
         tasks = [self._get_latest_chain_data(chain) for chain in chains]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
@@ -478,23 +531,20 @@ class RedisSSEServer:
                 chain_data[chain_name] = {"chain_name": chain_name, "tps": 0, "error": str(result)}
             else:
                 chain_data[chain_name] = result
-        
         return chain_data
     
     def _calculate_l2_metrics(self, chain_data: Dict[str, Any]) -> Dict[str, Optional[float]]:
-        """Calculate Layer 2 transaction cost metrics with safe parsing (Optimization #4)."""
+        """Calculate Layer 2 transaction cost metrics."""
         l2_data = []
         for name, data in chain_data.items():
             if name != "ethereum" and isinstance(data, dict):
                 tps = self._safe_float(data.get("tps", 0))
                 cost_usd = self._safe_float(data.get("tx_cost_erc20_transfer_usd", 0))
                 cost_eth = self._safe_float(data.get("tx_cost_erc20_transfer", 0))
-                
                 if tps > 0 and cost_usd > 0:
                     l2_data.append((cost_usd, cost_eth, tps))
         
-        if not l2_data:
-            return {"avg_cost_usd": None, "avg_cost_eth": None, "highest_cost_usd": None}
+        if not l2_data: return {"avg_cost_usd": None, "avg_cost_eth": None, "highest_cost_usd": None}
         
         total_weighted_usd = sum(cost_usd * tps for cost_usd, _, tps in l2_data)
         total_weighted_eth = sum(cost_eth * tps for _, cost_eth, tps in l2_data)
@@ -505,115 +555,45 @@ class RedisSSEServer:
             "avg_cost_eth": total_weighted_eth / total_tps if total_tps > 0 else None,
             "highest_cost_usd": max(cost_usd for cost_usd, _, _ in l2_data)
         }
-    
-    async def _calculate_global_metrics(self, chain_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate global metrics from chain data with safe parsing (Optimization #4)."""
-        try:
-            # Safe TPS metrics calculation
-            tps_values = []
-            for data in chain_data.values():
-                if isinstance(data, dict):
-                    tps = self._safe_float(data.get("tps", 0))
-                    tps_values.append(tps)
-            
-            total_tps = sum(tps_values)
-            highest_tps = max(tps_values, default=0)
-            active_chains = sum(1 for tps in tps_values if tps > 0)
-            
-            # Ethereum metrics with safe parsing
-            eth_data = chain_data.get("ethereum", {})
-            ethereum_tx_cost_usd = self._safe_float(eth_data.get("tx_cost_erc20_transfer_usd"))
-            ethereum_tx_cost_eth = self._safe_float(eth_data.get("tx_cost_erc20_transfer"))
-            
-            # L2 metrics
-            l2_metrics = self._calculate_l2_metrics(chain_data)
-            
-            # Update TPS records
-            current_timestamp = datetime.now().isoformat()
-            if total_tps > 0:
-                await self._update_tps_records(total_tps, current_timestamp, chain_data)
-            
-            return {
-                "total_tps": round(total_tps, 1),
-                "highest_tps": round(highest_tps, 1),
-                "highest_l2_cost_usd": l2_metrics["highest_cost_usd"],
-                "total_chains": len(chain_data),
-                "active_chains": active_chains,
-                "ethereum_tx_cost_usd": ethereum_tx_cost_usd,
-                "ethereum_tx_cost_eth": ethereum_tx_cost_eth,
-                "layer2s_tx_cost_usd": l2_metrics["avg_cost_usd"],
-                "layer2s_tx_cost_eth": l2_metrics["avg_cost_eth"],
-                "total_tps_ath": round(self.tps_ath, 1),
-                "total_tps_ath_timestamp": self.tps_ath_timestamp,
-                "total_tps_24h_high": round(self.tps_24h_high, 1),
-                "total_tps_24h_high_timestamp": self.tps_24h_high_timestamp,
-                "last_updated": current_timestamp
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating global metrics: {str(e)}")
-            return {
-                "total_tps": 0,
-                "total_chains": 0,
-                "active_chains": 0,
-                "total_tps_ath": round(self.tps_ath, 1),
-                "total_tps_ath_timestamp": self.tps_ath_timestamp,
-                "total_tps_24h_high": round(self.tps_24h_high, 1),
-                "total_tps_24h_high_timestamp": self.tps_24h_high_timestamp,
-                "error": str(e)
-            }
-    
+
     async def _update_data(self):
         """Fetch latest data from Redis and update internal state."""
         try:
             chain_data = await self._get_all_chain_data()
             global_metrics = await self._calculate_global_metrics(chain_data)
-            
             self.latest_data = chain_data
             self.global_metrics = global_metrics
-            
             logger.debug(f"Updated data for {len(chain_data)} chains, total TPS: {global_metrics.get('total_tps', 0)}")
-            
         except Exception as e:
             logger.error(f"Error updating data: {str(e)}")
     
     async def _broadcast_to_clients(self):
-        """Broadcast updated data to all connected SSE clients with improved error handling (Optimization #3)."""
-        if not self.connected_clients:
-            return
-        
+        """Broadcast updated data to all connected SSE clients."""
+        if not self.connected_clients: return
         try:
             message = json.dumps({
-                "type": "update",
-                "data": self.latest_data,
+                "type": "update", "data": self.latest_data,
                 "global_metrics": self.global_metrics,
                 "timestamp": datetime.now().isoformat()
             })
-            
             sse_message = f"data: {message}\n\n"
             disconnected_clients = set()
-            
             for client in self.connected_clients:
-                try:
-                    await client.write(sse_message.encode('utf-8'))
-                except (ConnectionResetError, ConnectionAbortedError, OSError):  # OPTIMIZED: Added OSError
+                try: await client.write(sse_message.encode('utf-8'))
+                except (ConnectionResetError, ConnectionAbortedError, OSError):
                     disconnected_clients.add(client)
                 except Exception as e:
                     logger.warning(f"Error sending to client: {str(e)}")
                     disconnected_clients.add(client)
-            
-            # CRITICAL: Actually remove the dead connections to prevent memory leaks
             if disconnected_clients:
                 self.connected_clients.difference_update(disconnected_clients)
                 logger.info(f"Removed {len(disconnected_clients)} disconnected clients. {len(self.connected_clients)} remaining.")
-                
         except Exception as e:
             logger.error(f"Error broadcasting to clients: {str(e)}")
     
     async def data_update_loop(self):
         """Background task that continuously updates data and broadcasts to clients."""
         logger.info(f"Starting data update loop with {self.config.update_interval}s interval")
-        
         while True:
             try:
                 await self._update_data()
@@ -624,291 +604,171 @@ class RedisSSEServer:
                 await asyncio.sleep(5)
     
     async def sse_handler(self, request):
-        """Handle SSE connection requests with connection limit (Optimization #5)."""
-        # Check connection limit to prevent DoS
+        """Handle SSE connection requests."""
         if len(self.connected_clients) >= self.config.max_connections:
-            logger.warning(f"Connection limit reached ({self.config.max_connections}), rejecting new connection")
             return web.Response(status=503, text="Too many connections")
         
         response = web.StreamResponse()
         response.headers.update({
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no'
+            'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'
         })
-        
         client_ip = request.remote
         logger.info(f"New SSE client connected from {client_ip}")
-        
         try:
             await response.prepare(request)
             self.connected_clients.add(response)
-            logger.info(f"Client added. Total clients: {len(self.connected_clients)}")
-            
-            # Send initial data
             initial_message = json.dumps({
-                "type": "initial",
-                "data": self.latest_data,
-                "global_metrics": self.global_metrics,
-                "timestamp": datetime.now().isoformat()
+                "type": "initial", "data": self.latest_data,
+                "global_metrics": self.global_metrics, "timestamp": datetime.now().isoformat()
             })
-            
             await response.write(f"data: {initial_message}\n\n".encode('utf-8'))
-            
-            # Keep connection alive with heartbeats
             while True:
                 await asyncio.sleep(self.config.heartbeat_interval)
-                try:
-                    await response.write(b": heartbeat\n\n")
-                except Exception:
-                    logger.info(f"Client {client_ip} disconnected during heartbeat")
-                    break
-                    
+                try: await response.write(b": heartbeat\n\n")
+                except Exception: break
         except (ConnectionResetError, ConnectionAbortedError):
             logger.info(f"Client {client_ip} disconnected")
-        except Exception as e:
-            logger.error(f"Error in SSE handler: {str(e)}")
         finally:
             self.connected_clients.discard(response)
-            logger.info(f"Client removed. Total clients: {len(self.connected_clients)}")
-        
         return response
     
     async def health_handler(self, request):
         """Health check endpoint."""
         return web.json_response({
-            "status": "healthy",
-            "connected_clients": len(self.connected_clients),
-            "max_connections": self.config.max_connections,  # NEW: Show limit
-            "total_chains": len(self.latest_data),
+            "status": "healthy", "connected_clients": len(self.connected_clients),
+            "max_connections": self.config.max_connections, "total_chains": len(self.latest_data),
             "active_chains": self.global_metrics.get("active_chains", 0),
             "total_tps": self.global_metrics.get("total_tps", 0),
             "total_tps_ath": self.global_metrics.get("total_tps_ath", 0),
             "total_tps_24h_high": self.global_metrics.get("total_tps_24h_high", 0),
             "redis_connected": self.redis_client is not None,
-            "chain_cache_active": self._chain_cache is not None,  # NEW: Cache status
+            "chain_cache_active": self._chain_cache is not None,
             "timestamp": datetime.now().isoformat()
         })
     
     async def api_data_handler(self, request):
-        """REST API endpoint to get current data."""
+        """REST API endpoint to get current global data."""
         return web.json_response({
-            "data": self.latest_data,
-            "global_metrics": self.global_metrics,
+            "data": self.latest_data, "global_metrics": self.global_metrics,
             "timestamp": datetime.now().isoformat()
         })
     
     async def history_handler(self, request):
-        """REST API endpoint to get TPS history for charts."""
+        """REST API endpoint to get global TPS history."""
         try:
-            # Get query parameters
-            limit = int(request.query.get('limit', 40))  # Default to 40 events
-            hours = int(request.query.get('hours', 24))   # Default to last 24 hours
-            
-            # Calculate time range
+            limit = int(request.query.get('limit', 100))
+            hours = int(request.query.get('hours', 24))
             now_ms = int(datetime.now().timestamp() * 1000)
             min_ts = now_ms - (hours * 60 * 60 * 1000)
             
-            # Get TPS history from Redis (sorted by timestamp, most recent first)
             raw_entries = await self.redis_client.zrevrangebyscore(
-                RedisKeys.TPS_HISTORY_24H, 
-                now_ms, 
-                min_ts, 
-                start=0, 
-                num=limit
+                RedisKeys.TPS_HISTORY_24H, now_ms, min_ts, start=0, num=limit
             )
+            history = [json.loads(raw_entry) for raw_entry in raw_entries]
             
-            # Parse and format the history data
-            history = []
-            for raw_entry in raw_entries:
-                try:
-                    data = json.loads(raw_entry)
-                    
-                    # # Get historical chain data for this timestamp to extract tx costs
-                    # entry_timestamp_ms = self._safe_int(data.get("timestamp_ms", 0))
-                    # eth_tx_cost_usd = None
-                    # eth_tx_cost_eth = None
-                    # l2_avg_cost_usd = None
-                    # l2_avg_cost_eth = None
-                    # l2_highest_cost_usd = None
-                    
-                    # # Fetch chain data around this timestamp to get tx costs
-                    # if entry_timestamp_ms > 0:
-                    #     historical_chain_data = await self._get_historical_chain_data_at_timestamp(entry_timestamp_ms)
-                        
-                    #     # Extract Ethereum costs
-                    #     eth_data = historical_chain_data.get("ethereum", {})
-                    #     if eth_data:
-                    #         eth_tx_cost_usd = self._safe_float(eth_data.get("tx_cost_erc20_transfer_usd"))
-                    #         eth_tx_cost_eth = self._safe_float(eth_data.get("tx_cost_erc20_transfer"))
-                        
-                    #     # Calculate L2 costs
-                    #     l2_metrics = self._calculate_l2_metrics(historical_chain_data)
-                    #     l2_avg_cost_usd = l2_metrics.get("avg_cost_usd")
-                    #     l2_avg_cost_eth = l2_metrics.get("avg_cost_eth")
-                    #     l2_highest_cost_usd = l2_metrics.get("highest_cost_usd")
-                    
-                    # Format the history entry
-                    entry = {
-                        "tps": self._safe_float(data.get("tps", 0)),
-                        "timestamp": data.get("timestamp", ""),
-                        #"timestamp_ms": entry_timestamp_ms,
-                        "total_chains": self._safe_int(data.get("total_chains", 0)),
-                        "active_chains": self._safe_int(data.get("active_chains", 0)),
-                        "is_ath": data.get("is_ath", "false").lower() == "true",
-                        #"ethereum_tx_cost_usd": eth_tx_cost_usd,
-                        #"ethereum_tx_cost_eth": eth_tx_cost_eth,
-                        #"layer2s_avg_cost_usd": l2_avg_cost_usd,
-                        #"layer2s_avg_cost_eth": l2_avg_cost_eth,
-                        #"layer2s_highest_cost_usd": l2_highest_cost_usd
-                    }
-                    
-                    history.append(entry)
-                    
-                except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning(f"Failed to parse history entry: {e}")
-                    continue
-            
-            # Calculate some summary statistics
+            avg_tps = max_tps = min_tps = 0
             if history:
-                tps_values = [entry["tps"] for entry in history]
-                # eth_cost_usd_values = [entry["ethereum_tx_cost_usd"] for entry in history if entry["ethereum_tx_cost_usd"] is not None]
-                # l2_cost_usd_values = [entry["layer2s_avg_cost_usd"] for entry in history if entry["layer2s_avg_cost_usd"] is not None]
-                
-                avg_tps = sum(tps_values) / len(tps_values)
-                max_tps = max(tps_values)
-                min_tps = min(tps_values)
-                
-                # # Transaction cost statistics
-                # avg_eth_cost_usd = sum(eth_cost_usd_values) / len(eth_cost_usd_values) if eth_cost_usd_values else None
-                # max_eth_cost_usd = max(eth_cost_usd_values) if eth_cost_usd_values else None
-                # min_eth_cost_usd = min(eth_cost_usd_values) if eth_cost_usd_values else None
-                
-                # avg_l2_cost_usd = sum(l2_cost_usd_values) / len(l2_cost_usd_values) if l2_cost_usd_values else None
-                # max_l2_cost_usd = max(l2_cost_usd_values) if l2_cost_usd_values else None
-                # min_l2_cost_usd = min(l2_cost_usd_values) if l2_cost_usd_values else None
-            else:
-                avg_tps = max_tps = min_tps = 0
-                # avg_eth_cost_usd = max_eth_cost_usd = min_eth_cost_usd = None
-                # avg_l2_cost_usd = max_l2_cost_usd = min_l2_cost_usd = None
-            
-            response_data = {
+                tps_values = [h['tps'] for h in history]
+                if tps_values:
+                    avg_tps = sum(tps_values) / len(tps_values)
+                    max_tps = max(tps_values)
+                    min_tps = min(tps_values)
+
+            return web.json_response({
                 "history": history,
                 "summary": {
-                    "total_events": len(history),
-                    "time_range_hours": hours,
-                    "avg_tps": round(avg_tps, 2),
-                    "max_tps": round(max_tps, 2),
-                    "min_tps": round(min_tps, 2),
-                    "current_ath": round(self.tps_ath, 1),
+                    "total_events": len(history), "time_range_hours": hours,
+                    "avg_tps": round(avg_tps, 2), "max_tps": round(max_tps, 2),
+                    "min_tps": round(min_tps, 2), "current_ath": round(self.tps_ath, 1),
                     "current_24h_high": round(self.tps_24h_high, 1),
-                    # "ethereum_tx_costs": {
-                    #     "avg_usd": round(avg_eth_cost_usd, 4) if avg_eth_cost_usd else None,
-                    #     "max_usd": round(max_eth_cost_usd, 4) if max_eth_cost_usd else None,
-                    #     "min_usd": round(min_eth_cost_usd, 4) if min_eth_cost_usd else None
-                    # },
-                    # "layer2s_tx_costs": {
-                    #     "avg_usd": round(avg_l2_cost_usd, 4) if avg_l2_cost_usd else None,
-                    #     "max_usd": round(max_l2_cost_usd, 4) if max_l2_cost_usd else None,
-                    #     "min_usd": round(min_l2_cost_usd, 4) if min_l2_cost_usd else None
-                    # }
-                },
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            logger.debug(f"Served history: {len(history)} events")
-            return web.json_response(response_data)
-            
+                }, "timestamp": datetime.now().isoformat()
+            })
         except ValueError as e:
-            logger.warning(f"Invalid query parameters in history request: {e}")
-            return web.json_response({
-                "error": "Invalid query parameters",
-                "message": str(e)
-            }, status=400)
-            
+            return web.json_response({"error": "Invalid query parameters", "message": str(e)}, status=400)
         except Exception as e:
-            logger.error(f"Error in history handler: {str(e)}")
-            return web.json_response({
-                "error": "Internal server error",
-                "message": "Failed to retrieve history data"
-            }, status=500)
-    
-    # async def _get_historical_chain_data_at_timestamp(self, timestamp_ms: int) -> Dict[str, Any]:
-    #     """Get chain data closest to a specific timestamp from Redis streams."""
-    #     try:
-    #         chains = await self._get_all_chains()
-    #         chain_data = {}
+            logger.error(f"Error in global history handler: {e}")
+            return web.json_response({"error": "Internal server error"}, status=500)
+
+    async def chain_data_handler(self, request):
+        """REST API endpoint to get current data for a single chain."""
+        chain_name = request.match_info.get('chain_name')
+        if not chain_name:
+            return web.json_response({"error": "Chain name not provided"}, status=400)
             
-    #         # For each chain, get data closest to the target timestamp
-    #         for chain_name in chains:
-    #             try:
-    #                 stream_key = RedisKeys.chain_stream(chain_name)
-                    
-    #                 # Get entries around the target timestamp (within 5 minutes)
-    #                 time_window = 5 * 60 * 1000  # 5 minutes in ms
-    #                 min_time = timestamp_ms - time_window
-    #                 max_time = timestamp_ms + time_window
-                    
-    #                 # Convert to Redis stream timestamp format (milliseconds-0)
-    #                 min_stream_id = f"{min_time}-0"
-    #                 max_stream_id = f"{max_time}-0"
-                    
-    #                 entries = await self.redis_client.xrange(stream_key, min_stream_id, max_stream_id, count=10)
-                    
-    #                 if entries:
-    #                     # Find the entry closest to target timestamp
-    #                     closest_entry = None
-    #                     closest_diff = float('inf')
-                        
-    #                     for entry_id, fields in entries:
-    #                         entry_timestamp = self._safe_int(fields.get("timestamp", 0))
-    #                         time_diff = abs(entry_timestamp - timestamp_ms)
-                            
-    #                         if time_diff < closest_diff:
-    #                             closest_diff = time_diff
-    #                             closest_entry = fields
-                        
-    #                     if closest_entry:
-    #                         chain_data[chain_name] = {
-    #                             "chain_name": chain_name,
-    #                             "display_name": closest_entry.get("display_name", chain_name),
-    #                             "tps": self._safe_float(closest_entry.get("tps", 0)),
-    #                             "tx_cost_erc20_transfer": self._safe_float(closest_entry.get("tx_cost_erc20_transfer", 0)),
-    #                             "tx_cost_erc20_transfer_usd": self._safe_float(closest_entry.get("tx_cost_erc20_transfer_usd", 0)),
-    #                             "timestamp": self._safe_int(closest_entry.get("timestamp", 0))
-    #                         }
-                    
-    #             except Exception as e:
-    #                 logger.debug(f"Error getting historical data for {chain_name}: {e}")
-    #                 continue
-            
-    #         return chain_data
-            
-    #     except Exception as e:
-    #         logger.error(f"Error getting historical chain data: {e}")
-    #         return {}
+        latest_data = self.latest_data.get(chain_name)
+        metrics = self.chain_metrics.get(chain_name)
+
+        if not latest_data:
+            return web.json_response({"error": f"Data for chain '{chain_name}' not found"}, status=404)
+
+        return web.json_response({
+            "data": latest_data,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat()
+        })
+
+    async def chain_events_handler(self, request):
+        """REST API endpoint to get ATH events for a single chain."""
+        chain_name = request.match_info.get('chain_name')
+        if not chain_name:
+            return web.json_response({"error": "Chain name not provided"}, status=400)
         
+        try:
+            limit = int(request.query.get('limit', 50))
+            raw_entries = await self.redis_client.zrevrange(
+                RedisKeys.chain_ath_history(chain_name), 0, limit - 1, withscores=False
+            )
+            events = [json.loads(entry) for entry in raw_entries]
+            return web.json_response({"events": events, "timestamp": datetime.now().isoformat()})
+
+        except Exception as e:
+            logger.error(f"Error in chain_events_handler for {chain_name}: {e}")
+            return web.json_response({"error": "Internal server error"}, status=500)
+
+    async def chain_history_handler(self, request):
+        """REST API endpoint to get TPS history for a single chain."""
+        chain_name = request.match_info.get('chain_name')
+        if not chain_name:
+            return web.json_response({"error": "Chain name not provided"}, status=400)
+            
+        try:
+            limit = int(request.query.get('limit', 100))
+            hours = int(request.query.get('hours', 24))
+            
+            now_ms = int(datetime.now().timestamp() * 1000)
+            min_ts = now_ms - (hours * 60 * 60 * 1000)
+            
+            key = RedisKeys.chain_tps_history_24h(chain_name)
+            raw_entries = await self.redis_client.zrevrangebyscore(
+                key, now_ms, min_ts, start=0, num=limit
+            )
+            history = [json.loads(entry) for entry in raw_entries]
+            return web.json_response({"history": history, "timestamp": datetime.now().isoformat()})
+
+        except ValueError as e:
+            return web.json_response({"error": "Invalid query parameters", "message": str(e)}, status=400)
+        except Exception as e:
+            logger.error(f"Error in chain_history_handler for {chain_name}: {e}")
+            return web.json_response({"error": "Internal server error"}, status=500)
+
 async def create_app(server: RedisSSEServer):
     """Create and configure the aiohttp application."""
     app = web.Application()
-    
-    # Configure CORS
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(
-            allow_credentials=True,
-            expose_headers="*",
-            allow_headers="*",
-            allow_methods="*"
+            allow_credentials=True, expose_headers="*", allow_headers="*", allow_methods="*"
         )
     })
     
-    # Add routes
     routes = [
         web.get("/events", server.sse_handler),
         web.get("/health", server.health_handler),
         web.get("/api/data", server.api_data_handler),
         web.get("/api/history", server.history_handler),
+        web.get("/api/chain/{chain_name}", server.chain_data_handler),
+        web.get("/api/chain/{chain_name}/history", server.chain_history_handler),
+        web.get("/api/chain/{chain_name}/events", server.chain_events_handler),
     ]
 
     for route in routes:
@@ -925,17 +785,17 @@ async def main():
         await server.initialize()
         app = await create_app(server)
         
-        # Start background tasks
         update_task = asyncio.create_task(server.data_update_loop())
-        maintenance_task = asyncio.create_task(server.periodic_maintenance_loop())  # Combined task
+        maintenance_task = asyncio.create_task(server.periodic_maintenance_loop())
         
-        # Start the web server
         logger.info(f"🚀 Starting SSE server on {config.server_host}:{config.server_port}")
-        logger.info(f"📡 SSE endpoint: http://{config.server_host}:{config.server_port}/events")
-        logger.info(f"🏥 Health check: http://{config.server_host}:{config.server_port}/health")
-        logger.info(f"📈 API endpoint: http://{config.server_host}:{config.server_port}/api/data")
-        logger.info(f"📊 History endpoint: http://{config.server_host}:{config.server_port}/api/history")
-        logger.info(f"🔒 Max connections: {config.max_connections}")
+        logger.info(f"📡 SSE endpoint: /events")
+        logger.info(f"🏥 Health check: /health")
+        logger.info(f"📈 Global API: /api/data")
+        logger.info(f"📊 Global History: /api/history")
+        logger.info(f"⛓️ Chain Data: /api/chain/{{chain_name}}")
+        logger.info(f"📜 Chain History: /api/chain/{{chain_name}}/history")
+        logger.info(f"🎉 Chain Events: /api/chain/{{chain_name}}/events")
         
         runner = web.AppRunner(app)
         await runner.setup()
@@ -943,7 +803,7 @@ async def main():
         await site.start()
 
         try:
-            await asyncio.Future()  # Run forever
+            await asyncio.Future()
         except KeyboardInterrupt:
             logger.info("🛑 Received shutdown signal")
         finally:
@@ -957,7 +817,6 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Fatal error: {str(e)}")
         raise
-
 
 if __name__ == "__main__":
     try:
