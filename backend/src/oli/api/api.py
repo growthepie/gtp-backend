@@ -361,39 +361,65 @@ class TrustListPostResponse(BaseModel):
 # CRYPTO / VERIFICATION
 #
 
-def decode_attestation_data(msg: AttestationMessage) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+def parse_caip10(caip10: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(caip10, str):
+        return (None, None)
+    if caip10.count(":") != 2:
+        return (None, None)
+    namespace, reference, account = caip10.split(":", 2)
+    if not namespace or not reference or not account:
+        return (None, None)
+    return (f"{namespace}:{reference}", account)
+
+
+def decode_attestation_data(msg: AttestationMessage) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
     """
-    Decode msg.data assuming schema:
-      (string chain_id, string tags_json)
+    Decode msg.data as (string subject, string tags_json), supporting:
+      - new schema: subject == CAIP10 (namespace:reference:account)
+      - old schema: subject == chain_id (namespace:reference)
 
     Returns:
-      (chain_id_str, tags_dict)
-    where chain_id_str is e.g. "eip155:8453"
-    and tags_dict is a decoded JSON object from tags_json.
+      (chain_id_str, recipient_str, tags_dict)
+    where recipient_str is only set for CAIP10 inputs.
     """
 
     if not isinstance(msg.data, str):
-        return (None, None)
+        return (None, None, None)
     if not msg.data.startswith("0x"):
-        return (None, None)
+        return (None, None, None)
 
     # strip "0x", decode hex -> bytes
     raw_bytes = hex_to_bytes(msg.data)
 
     try:
         decoded_tuple = abi_decode(
-            ['string', 'string'],
-            raw_bytes
+            ["string", "string"],
+            raw_bytes,
         )
     except Exception:
         # doesn't match expected tuple layout
-        return (None, None)
+        return (None, None, None)
 
     if not isinstance(decoded_tuple, (list, tuple)) or len(decoded_tuple) != 2:
-        return (None, None)
+        return (None, None, None)
 
-    chain_id_str = decoded_tuple[0]
+    subject_str = decoded_tuple[0]
     tags_json_str = decoded_tuple[1]
+
+    chain_id_str = None
+    recipient_str = None
+    if isinstance(subject_str, str):
+        colon_count = subject_str.count(":")
+        if colon_count == 2:
+            chain_id_str, recipient_str = parse_caip10(subject_str)
+            if not chain_id_str or not recipient_str:
+                return (None, None, None)
+        elif colon_count == 1:
+            chain_id_str = subject_str
+        else:
+            return (None, None, None)
+    else:
+        return (None, None, None)
 
     # tags_json_str should itself be valid JSON
     try:
@@ -401,7 +427,7 @@ def decode_attestation_data(msg: AttestationMessage) -> Tuple[Optional[str], Opt
     except Exception:
         tags_dict = None
 
-    return (chain_id_str, tags_dict)
+    return (chain_id_str, recipient_str, tags_dict)
 
 
 def left_pad_to_32(b: bytes) -> bytes:
@@ -643,12 +669,20 @@ def build_row_from_payload(att: AttestationPayload):
 
     uid_bytes = hex_to_bytes(sig.uid)
     attester_bytes = hex_to_bytes(att.signer)
-    recipient_bytes = hex_to_bytes(msg.recipient)
-
     ts = unix_str_to_datetime(msg.time)
 
     # decode structured data from msg.data
-    decoded_chain_id, decoded_tags_dict = decode_attestation_data(msg)
+    decoded_chain_id, decoded_recipient, decoded_tags_dict = decode_attestation_data(msg)
+    if not decoded_chain_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid attestation data; expected chain_id or CAIP10",
+        )
+    recipient_value = decoded_recipient if decoded_recipient is not None else msg.recipient
+    try:
+        recipient_bytes = hex_to_bytes(recipient_value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid recipient address")
 
     # Prepare tags_json for DB
     if decoded_tags_dict is not None:

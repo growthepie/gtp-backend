@@ -77,7 +77,7 @@ class AdapterOLIOnchain(AbstractAdapter):
                 r = self.get_attestation_data(uid)
                 self.schema_info = str(self.schema_chain) + '__' + r['schema']
                 # depending on which schema we are reading, process accordingly
-                if r['schema'] == '0xb763e62d940bed6f527dd82418e146a904e62a297b8fa765c9b3e1f0bc6fdd68':  # Labels
+                if r['schema'] == '0xb763e62d940bed6f527dd82418e146a904e62a297b8fa765c9b3e1f0bc6fdd68':  # Labels v1
                     # decode label data
                     label_data = self.decode_label_data(r['data'])
                     # append to d
@@ -98,7 +98,37 @@ class AdapterOLIOnchain(AbstractAdapter):
                         'chain_id': label_data['chain_id'],
                         'tags_json': label_data['tags_json']
                     })
-                elif r['schema'] == '0x6d780a85bfad501090cd82868a0c773c09beafda609d54888a65c106898c363d':  # Trust Lists
+                elif r['schema'] == '0x9e3f6cfb1f5f8e2f3d3e6a5f4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c':  # Labels v2
+                    # decode label data
+                    label_data = self.decode_label_data(r['data'])
+                    # split caip10
+                    caip10 = label_data['chain_id']
+                    if caip10.count(":") != 2:
+                        # invalid caip10 format, max 2x":" allowed
+                        print(f"Invalid caip10 format: {caip10} for uid: {uid}. Skipping indexing of this label.")
+                    else:
+                        chain_namespace, chain_reference, address = caip10.split(":", 2)
+                        label_data['chain_id'] = chain_namespace + ':' + chain_reference
+                        label_data['recipient'] = address
+                    # append to d
+                    d.append({
+                        'uid': uid,
+                        'time': pd.to_datetime(r['time'], unit='s').isoformat(),
+                        'attester': r['attester'],
+                        'recipient': label_data['recipient'],
+                        'revoked': True if extract_params.get('topics', [None])[0] == '0xf930a6e2523c9cc298691873087a740550b8fc85a0680830414c148ed927f615' or r['revocationTime'] > 0 else False,
+                        'is_offchain': False,
+                        'tx_hash': '0x' + log['transactionHash'].hex(),
+                        'ipfs_hash': None,
+                        'revocation_time': pd.to_datetime(r['revocationTime'], unit='s').isoformat() if r['revocationTime'] > 0 else None,
+                        'raw': None,
+                        'last_updated_time': pd.Timestamp.now(tz=timezone.utc).replace(tzinfo=None).isoformat(),
+                        'schema_info': self.schema_info,
+                        # data fields
+                        'chain_id': label_data['chain_id'],
+                        'tags_json': label_data['tags_json']
+                    })
+                elif r['schema'] == '0x6d780a85bfad501090cd82868a0c773c09beafda609d54888a65c106898c363d':  # Trust Lists v1
                     # decode trust list data
                     trust_list_data = self.decode_trust_list_data(r['data'])
                     # append to d
