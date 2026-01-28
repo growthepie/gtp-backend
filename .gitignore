@@ -55,3 +55,5 @@ backend/add_new_date.py
 backend/test_screenshots.py
 
 backend/src/adapters/*.txt
+backend/pipeline/aggregator/target/*
+backend/pipeline/collectors/configs/*
