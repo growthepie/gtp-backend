@@ -3,7 +3,8 @@ Worker: Fetches blocks from queue and inserts to ClickHouse.
 """
 
 import asyncio
-from typing import Optional
+import time
+from typing import Optional, TYPE_CHECKING
 import structlog
 import aiohttp
 
@@ -11,6 +12,9 @@ from .block_queue import BlockQueue
 from .rpc_pool import RPCPool
 from ..rpc import RPCClient
 from ..processor import BlockProcessor
+
+if TYPE_CHECKING:
+    from ..telemetry import Telemetry
 
 logger = structlog.get_logger()
 
@@ -36,6 +40,7 @@ class Worker:
         processor: BlockProcessor,
         clickhouse_url: str = "http://localhost:8123",
         clickhouse_db: str = "gtp",
+        telemetry: Optional["Telemetry"] = None,
     ):
         self.worker_id = worker_id
         self.queue = queue
@@ -43,6 +48,7 @@ class Worker:
         self.processor = processor
         self.clickhouse_url = clickhouse_url
         self.clickhouse_db = clickhouse_db
+        self.telemetry = telemetry
         
         self._running = False
         self._current_rpc: Optional[str] = None
@@ -114,10 +120,24 @@ class Worker:
             return
         
         self._current_rpc = rpc_url
+        start_time = time.time()
+        rpc_success = False
         
         try:
             # 3. Fetch and process
+            rpc_start = time.time()
             block_data = await self._fetch_block(rpc_url, block_number)
+            rpc_latency_ms = (time.time() - rpc_start) * 1000
+            rpc_success = True
+            
+            # Record RPC success
+            if self.telemetry:
+                self.telemetry.record_rpc_request(
+                    url=rpc_url,
+                    success=True,
+                    latency_ms=rpc_latency_ms,
+                    blocks=1,
+                )
             
             # 4. Insert to ClickHouse
             await self._insert_to_clickhouse(block_data)
@@ -126,16 +146,45 @@ class Worker:
             await self.queue.complete_block(block_number)
             self._blocks_processed += 1
             
+            # Record worker success
+            processing_time_ms = (time.time() - start_time) * 1000
+            if self.telemetry:
+                self.telemetry.record_worker_block(
+                    worker_id=self.worker_id,
+                    success=True,
+                    processing_time_ms=processing_time_ms,
+                )
+            
             logger.debug(
                 "Block processed",
                 worker_id=self.worker_id,
                 block_number=block_number,
                 tx_count=block_data.tx_count,
+                processing_ms=f"{processing_time_ms:.0f}",
             )
             
             await self.rpc_pool.release(rpc_url, success=True)
             
         except Exception as e:
+            processing_time_ms = (time.time() - start_time) * 1000
+            
+            # Record RPC failure if we didn't succeed
+            if self.telemetry and not rpc_success:
+                self.telemetry.record_rpc_request(
+                    url=rpc_url,
+                    success=False,
+                    latency_ms=processing_time_ms,
+                    blocks=0,
+                )
+            
+            # Record worker failure
+            if self.telemetry:
+                self.telemetry.record_worker_block(
+                    worker_id=self.worker_id,
+                    success=False,
+                    processing_time_ms=processing_time_ms,
+                )
+            
             logger.warning(
                 "Failed to process block",
                 worker_id=self.worker_id,

@@ -15,6 +15,7 @@ from .block_queue import BlockQueue
 from .rpc_pool import RPCPool, RPCEndpoint
 from .worker import Worker
 from ..processor import BlockProcessor
+from ..telemetry import Telemetry
 
 logger = structlog.get_logger()
 
@@ -28,6 +29,7 @@ class CollectorManager:
     - Spawns workers based on available RPC slots
     - Graceful shutdown with state persistence
     - Stats logging
+    - Telemetry for RPC and worker health
     """
     
     def __init__(
@@ -47,6 +49,9 @@ class CollectorManager:
         self.clickhouse_db = clickhouse_db
         self.reorg_depth = reorg_depth
         self.stats_interval = stats_interval
+        
+        # Telemetry
+        self.telemetry = Telemetry(chain=chain)
         
         # Components
         self.queue = BlockQueue(
@@ -182,6 +187,7 @@ class CollectorManager:
                 processor=self.processor,
                 clickhouse_url=self.clickhouse_url,
                 clickhouse_db=self.clickhouse_db,
+                telemetry=self.telemetry,
             )
             
             self._workers.append(worker)
@@ -208,24 +214,32 @@ class CollectorManager:
     
     async def _stats_logger_loop(self) -> None:
         """Periodically log stats."""
+        log_count = 0
+        
         while self._running:
             await asyncio.sleep(self.stats_interval)
+            log_count += 1
             
             try:
                 queue_stats = await self.queue.get_stats()
-                
                 active_workers = len([w for w in self._workers if w._running])
+                overall = self.telemetry.get_overall_stats()
                 
                 logger.info(
                     "Stats",
                     chain=self.chain,
                     pending=queue_stats.pending,
                     processing=queue_stats.processing,
-                    done=queue_stats.done,
-                    failed=queue_stats.failed,
-                    blocks_per_sec=f"{queue_stats.blocks_per_second:.1f}",
+                    done=overall["total_blocks_processed"],
+                    failed=overall["total_blocks_failed"],
+                    blocks_per_sec=overall["avg_blocks_per_second"],
                     workers=active_workers,
                 )
+                
+                # Every 6th log (1 minute), show RPC stats
+                if log_count % 6 == 0:
+                    for rpc_stats in self.telemetry.get_rpc_summary():
+                        logger.info("RPC", **rpc_stats)
                 
             except Exception as e:
                 logger.error("Error logging stats", error=str(e))
