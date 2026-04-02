@@ -65,6 +65,8 @@ class AdapterOSO(AbstractAdapter):
                         df = pd.concat([df, df_temp], ignore_index=True)
 
         # prepare df_projects for inserting into our db table 'oli_oss_directory'
+        if 'token_coingecko_api_id' not in df.columns:
+            df['token_coingecko_api_id'] = None
         df = df[['name', 'display_name', 'description', 'github', 'websites', 'npm', 'social', 'token_coingecko_api_id']]
         df['active'] = True # project is marked active because it is in the OSS directory
         df['source'] = 'OSS_DIRECTORY'
