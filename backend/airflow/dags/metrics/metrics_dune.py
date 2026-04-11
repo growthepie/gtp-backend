@@ -443,11 +443,11 @@ def etl():
         ad = AdapterDune(adapter_params, db_connector)
         df = ad.extract(load_params)
 
-        # remove rows which are known false positives e.g. withdrawBond for taiko
-        df = df[~((df.l2 == 'taiko') & (df.method == '0xc3daab96'))]
-
         if df.empty:
             return
+
+        # remove rows which are known false positives e.g. withdrawBond for taiko
+        df = df[~((df.l2 == 'taiko') & (df.method == '0xc3daab96'))]
 
         for _, row in df.iterrows():
             send_discord_message(f"<@790276642660548619> The economics mapping function for **{row.l2}** has changed. Details: settlement on {row.settlement_layer}, {row.no_of_trx} trx per day, from_address: {row.from_address}, to_address: {row.to_address}, method: {row.method}.", os.getenv('DISCORD_ALERTS'))
