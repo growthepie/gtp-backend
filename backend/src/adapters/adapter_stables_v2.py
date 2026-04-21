@@ -512,29 +512,45 @@ class AdapterStablecoinSupply(AbstractAdapter):
             df['origin_key'] = chain
             return df
         
+        # check if SupplyReader is deployed on ethereum and from which date
+        chain_config_eth = self.config[self.config['origin_key'] == 'ethereum']
+        supplyreader_eth_raw = chain_config_eth['deployed_supplyreader'].iloc[0] if not chain_config_eth.empty else None
+        is_eth_supplyreader = pd.notna(supplyreader_eth_raw) and supplyreader_eth_raw != ''
+        eth_supplyreader_date = (pd.to_datetime(supplyreader_eth_raw).date() if is_eth_supplyreader else None)
+
         # use rpc to backfill recent dates
         for index, row in db_progress_filtered.iterrows():
             bridge = row['address']
 
             # get block date map for ethereum
-            block_date_mapping = self.get_last_block_of_day_from_db('ethereum', row['date']) 
+            block_date_mapping = self.get_last_block_of_day_from_db('ethereum', row['date'])
             block_date_mapping = block_date_mapping[block_date_mapping['date'] <= (pd.to_datetime('today').date() if pretend_today_is is None else pretend_today_is)]
-            
+
             # send warning & return if no block_date_mapping is found
             if len(block_date_mapping) == 0: # raise error if we have no 'first_block_of_day' data for the chain
                 print(f"ERROR: Missing dates in block date mapping for chain {chain}. Can't pull in stablecoin track_on_l1 data via RPC or Dune. Please backfill 'first_block_of_day' first.")
                 continue
 
-            # pull in with RPC using SupplyReader for each date in block_date_mapping
+            # pull in with RPC for each date in block_date_mapping
             for index, row in block_date_mapping.iterrows():
                 block_number = row['value']
                 date = row['date']
 
-                # pull in with RPC using SupplyReader
-                balances = self.read_tokensBalance_SupplyReader('ethereum', bridge, token_address_df['address'].tolist(), block_number)
-                token_address_df['value'] = balances
-                token_address_df['value'] = token_address_df['value']/(10 ** token_address_df['decimals'])
-                token_address_df = token_address_df[token_address_df['value'] > min_amount].reset_index(drop=True) # minimum threshold for it to start be tracked 100
+                use_supply_reader = is_eth_supplyreader and eth_supplyreader_date <= pd.to_datetime(date).date()
+
+                if use_supply_reader:
+                    # batch read via SupplyReader contract
+                    balances = self.read_tokensBalance_SupplyReader('ethereum', bridge, token_address_df['address'].tolist(), block_number)
+                    token_address_df['value'] = balances
+                    token_address_df['value'] = token_address_df['value'] / (10 ** token_address_df['decimals'])
+                else:
+                    # fall back to individual balanceOf calls when SupplyReader not yet deployed on ethereum
+                    token_address_df['value'] = [
+                        self.read_balance_rpc('ethereum', bridge, r['address'], block_number, r['decimals'])
+                        for _, r in token_address_df.iterrows()
+                    ]
+
+                token_address_df = token_address_df[token_address_df['value'] > min_amount].reset_index(drop=True) # minimum threshold for it to start be tracked
                 df_day = token_address_df.copy()
                 df_day['date'] = date
                 df_day['address'] = bridge # we set the address to the bridge address, so we can track which bridge this token is sitting on
@@ -542,8 +558,8 @@ class AdapterStablecoinSupply(AbstractAdapter):
 
                 # merge pulled data into df_all
                 df_all = pd.concat([df_all, df_day], ignore_index=True)
-                print(f"Pulled track_on_l1 data for bridge {bridge} on date {date} and block {block_number} using SupplyReader with RPC, found {len(df_day)} token_ids.")
-                
+                print(f"Pulled track_on_l1 data for bridge {bridge} on date {date} and block {block_number} using {'SupplyReader' if use_supply_reader else 'RPC'}, found {len(df_day)} token_ids.")
+
                 # break in case we do not find any balances above the minimum threshold
                 if len(token_address_df) == 0:
                     print(f"No tokens above the minimum threshold of {min_amount} found on bridge {bridge} for date {date}. Stopping further backfill for this bridge address.")
