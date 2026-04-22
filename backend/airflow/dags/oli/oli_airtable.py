@@ -500,6 +500,11 @@ def etl():
                 tags = df_merged.set_index('tag_id')['value'].to_dict()
                 address = group[0][0].replace('\\x', '0x')
                 chain_id = group[0][1]
+                # TODO(contract_label_review): same diff capture as in airtable_read_automated_labels().
+                # review_source = 'airtable_reattest' here (protocol-likely owner_project assignment flow).
+                # gtp_owner_project = tags.get('owner_project') — this is the primary signal being captured.
+                # gtp_no_owner_project from new "Label Pool Reattest" Airtable checkbox field.
+                # Requires db_connector.get_contract_label_features() + insert_contract_label_review().
                 # submit offchain attestation
                 response = oli.submit_label(address, chain_id, tags)
                 print(f"Successfully attested label for {address} on {chain_id}: {response}")
@@ -561,6 +566,37 @@ def etl():
             tags = df_merged.set_index('tag_id')['value'].to_dict()
             address = group[0][0].replace('\\x', '0x')
             chain_id = group[0][1]
+
+            # TODO(contract_label_review): before oli.submit_label(), capture the review diff.
+            # Steps:
+            #   1. Look up AI originals: ai_row = db_connector.get_contract_label_features([(address, origin_key)])
+            #      origin_key derived from chain_id via sys_main_conf lookup or Config.SUPPORTED_CHAINS inverse.
+            #   2. Detect changes vs what Airtable has (human may have edited contract_name / usage_category):
+            #      gtp_contract_name  = tags.get('contract_name')  if tags.get('contract_name')  != ai_row.get('ai_contract_name')  else None
+            #      gtp_usage_category = tags.get('usage_category') if tags.get('usage_category') != ai_row.get('ai_usage_category') else None
+            #      gtp_owner_project  = tags.get('owner_project') or None
+            #      gtp_no_owner       = bool(row_data.get('gtp_no_owner_project', False))  ← new Airtable checkbox field
+            #   3. Write diff row:
+            #      db_connector.insert_contract_label_review([{
+            #          'address': address, 'origin_key': origin_key,
+            #          'labeled_at': ai_row.get('labeled_at'),
+            #          'reviewed_at': datetime.utcnow(),
+            #          'review_source': 'airtable_automated',
+            #          'ai_contract_name': ai_row.get('ai_contract_name'),
+            #          'ai_usage_category': ai_row.get('ai_usage_category'),
+            #          'ai_confidence': ai_row.get('ai_confidence'),
+            #          'ai_owner_project_likely': ai_row.get('ai_owner_project_likely', False),
+            #          'gtp_contract_name': gtp_contract_name,
+            #          'gtp_usage_category': gtp_usage_category,
+            #          'gtp_owner_project': gtp_owner_project,
+            #          'gtp_no_owner_project': gtp_no_owner,
+            #          'name_was_changed': gtp_contract_name is not None,
+            #          'category_was_changed': gtp_usage_category is not None,
+            #          'owner_was_assigned': gtp_owner_project is not None,
+            #      }])
+            # Requires new Airtable fields in "Label Pool Automated":
+            #   - gtp_owner_project  (single line text)  — human assigns protocol slug
+            #   - gtp_no_owner_project (checkbox)         — human confirms no protocol owner
             response = oli.submit_label(address, chain_id, tags)
             print(f'Re-attested {address} on {chain_id}: {response}')
 

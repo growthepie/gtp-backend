@@ -992,6 +992,30 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
                 args.setdefault('reasoning', '')
                 # Attach novel_tokens so sentinel can use them without re-computing
                 args['novel_tokens'] = novel_tokens
+                # TODO(contract_label_features): extend return dict with pre-computed signals so
+                # automated_labeler.py can write them to contract_label_features without re-computing.
+                # Add to args before return:
+                #   args['common_tokens']              = common_tokens
+                #   args['matched_routers']            = list(matched_routers)
+                #   args['matched_dex_pools']          = list(matched_dex_pools)
+                #   args['calls_into_dex_pool_swap']   = calls_into_dex_pool_swap
+                #   args['matched_lending']            = list(matched_lending)
+                #   args['matched_staking']            = list(matched_staking)
+                #   args['matched_bridges']            = list(matched_bridges)
+                #   args['matched_oracle_fns']         = list(matched_oracle_fns)
+                #   args['delegates_to']               = this_contract_delegates_to or None
+                #   args['raw_delegate']               = this_contract_raw_delegate
+                #   args['all_traces_empty']           = all_traces_empty
+                #   args['traces_only_raw_opcodes']    = traces_only_raw_opcodes
+                #   args['named_contracts_in_traces']  = sorted(named_contracts_in_traces)
+                #   args['caller_diversity_pct']       = caller_diversity_pct
+                #   args['caller_diversity_label']     = caller_diversity_label
+                #   args['unique_callers']             = unique_callers
+                #   args['total_traces_sampled']       = total_traces_with_caller
+                #   args['log_signals']                = log_signals   (full decode_log_signals dict)
+                #   args['sentinel_fired']             = False          (True in sentinel fast-path)
+                # Sentinel fast-path (see lines ~1060–1090) also needs sentinel_fired=True added.
+                # Fallback return (see lines ~1006–1012) needs all fields with safe empty defaults.
                 return args
             logger.warning(f"[Classifier] Could not parse Gemini response for {address}: {raw[:120]!r}")
 
@@ -1003,6 +1027,8 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
     except Exception as e:
         logger.error(f"[Classifier] Gemini API error for {address}: {e}")
 
+    # TODO(contract_label_features): add all pre-computed signal keys with safe empty defaults
+    # to this fallback return so contract_label_features always gets a complete row even on failure.
     return {
         'contract_name': bs_name if bs_name != 'unknown' else f"Contract-{address[:8]}",
         'usage_category': fallback_id,

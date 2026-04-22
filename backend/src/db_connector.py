@@ -2157,7 +2157,34 @@ class DbConnector:
 
                 df = pd.read_sql(exec_string, self.engine.connect())
                 return df
-        
+
+        # TODO(contract_label_features): add three new methods here for the approval workflow.
+        #
+        # 1. upsert_contract_label_features(rows: list[dict])
+        #    Bulk upsert into public.contract_label_features (ON CONFLICT (address, origin_key) DO UPDATE).
+        #    Array columns (novel_tokens, matched_routers, etc.) → PostgreSQL text[].
+        #    jsonb columns (bs_token_transfers, log_top_events) → json.dumps().
+        #    address → decode(addr_hex, 'hex').
+        #    Called by automated_labeler.py after classification, before OLI attestation.
+        #
+        # 2. insert_contract_label_review(rows: list[dict])
+        #    Append-only INSERT into public.contract_label_review (no ON CONFLICT — audit log).
+        #    Captures the diff between AI output (from contract_label_features) and GTP-attested values.
+        #    Called by oli_airtable.py in airtable_read_automated_labels() and
+        #    airtable_read_label_pool_reattest() immediately before oli.submit_label().
+        #    Columns: address, origin_key, labeled_at, reviewed_at, review_source,
+        #             ai_contract_name, ai_usage_category, ai_confidence, ai_owner_project_likely,
+        #             gtp_contract_name, gtp_usage_category, gtp_owner_project, gtp_no_owner_project,
+        #             name_was_changed, category_was_changed, owner_was_assigned.
+        #
+        # 3. get_contract_label_features(address_origin_pairs: list[tuple[str, str]]) -> dict
+        #    SELECT ai_contract_name, ai_usage_category, ai_confidence, ai_owner_project_likely, labeled_at
+        #    FROM public.contract_label_features
+        #    WHERE (address, origin_key) IN (...)
+        #    Returns dict keyed by (address, origin_key) for O(1) lookup in oli_airtable.py.
+        #
+        # DDL for both tables is in docs/contract_label_features_schema.md.
+
         ## TODO: filter by contracts only?
         def get_labels_lite_db(self, limit=50000, order_by='txcount', origin_keys=None):
                 exec_string = f"""

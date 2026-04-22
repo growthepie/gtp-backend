@@ -893,6 +893,27 @@ async def run_pipeline(args):
         rows = build_attestation_rows(final, valid_ids)
     json_path, csv_path = write_output(rows, args.output_dir)
 
+    # TODO(contract_label_features): write all classified contracts (including low-confidence ones
+    # below the 0.5 attestation threshold) to public.contract_label_features via a new
+    # db_connector.upsert_contract_label_features() method. This must happen BEFORE OLI attestation
+    # so every run is captured regardless of whether the contract clears the confidence threshold.
+    #
+    # Build feature rows from `final` (the list of enriched+labeled contract dicts):
+    #
+    #   feature_rows = [_build_feature_row(c) for c in final if c.get('label')]
+    #   db_connector.upsert_contract_label_features(feature_rows)
+    #
+    # _build_feature_row(contract) pulls from:
+    #   contract['blockscout']      → is_verified, is_proxy, impl_address, impl_name, impl_verified, blockscout_name
+    #   contract['github']          → has_github_repo, github_repo_count
+    #   contract['metrics']         → txcount, gas_eth, avg_daa, avg_gas_per_tx, rel_cost, success_rate, day_range
+    #   contract['token_transfers'] → bs_token_transfers (raw jsonb)
+    #   contract['label']           → all ai_* columns + all pre-computed signal columns
+    #                                 (requires the TODO in ai_classifier.py to be done first)
+    #   _is_protocol_likely(...)    → ai_owner_project_likely (bool)
+    #
+    # See docs/contract_label_features_schema.md for the full column list.
+
     # Summary
     by_category: dict[str, int] = {}
     for r in rows:
