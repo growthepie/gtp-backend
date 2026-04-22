@@ -129,7 +129,6 @@ def run_dag():
         dict_dropdown = fix_dict_nan(dict_dropdown, 'chain_dropdown', send_notification=True)
         upload_json_to_cf_s3(s3_bucket, 'v1/quick-bites/stablecoins/dropdown-chains', dict_dropdown, cf_distribution_id, invalidate=False)
 
-
     @task
     def create_jsons_project_qb():
         from src.misc.jinja_helper import execute_jinja_query
@@ -304,6 +303,54 @@ def run_dag():
         data_dict_total = fix_dict_nan(data_dict_total, 'stablecoins_fiat_total', send_notification=False)
         upload_json_to_cf_s3(s3_bucket, 'v1/quick-bites/stablecoins/fiat/timeseries', data_dict_total, cf_distribution_id, invalidate=False)
 
+        ### unique fiat count timeseries (how many distinct fiats exist per week + which ones were added)
+        sql_unique_fiat = """
+            WITH daily_fiats AS (
+              SELECT DISTINCT
+                "date",
+                fiat
+              FROM public.vw_fact_stables_mcap_v2
+              WHERE fiat IS NOT NULL
+            ),
+            fiat_first_seen AS (
+              SELECT
+                fiat,
+                MIN("date") AS first_seen_date
+              FROM daily_fiats
+              GROUP BY fiat
+            )
+            SELECT
+              DATE_TRUNC('week', d."date") AS date,
+              COUNT(DISTINCT d.fiat) AS unique_fiat_count,
+              STRING_AGG(DISTINCT d.fiat, ', ' ORDER BY d.fiat) FILTER (WHERE DATE_TRUNC('week', f.first_seen_date) = DATE_TRUNC('week', d."date")) AS change
+            FROM daily_fiats d
+            JOIN fiat_first_seen f ON f.fiat = d.fiat
+            GROUP BY DATE_TRUNC('week', d."date")
+            ORDER BY date DESC;
+        """
+        df_unique_fiat = pd.read_sql(sql_unique_fiat, db_connector.engine)
+
+        dt_uf = pd.to_datetime(df_unique_fiat['date'], errors="raise", utc=True)
+        df_unique_fiat['unix_timestamp'] = (
+            (dt_uf - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta("1ms")
+        ).astype("int64")
+
+        values_uf = [
+            [int(row['unix_timestamp']), int(row['unique_fiat_count']), row['change']]
+            for _, row in df_unique_fiat.iterrows()
+        ]
+
+        data_dict_uf = {
+            "data": {
+                "timeseries": {
+                    "types": ["unix", "unique_fiat_count", "change"],
+                    "values": values_uf
+                }
+            }
+        }
+        data_dict_uf = fix_dict_nan(data_dict_uf, 'stablecoins_unique_fiat_count', send_notification=False)
+        upload_json_to_cf_s3(s3_bucket, 'v1/quick-bites/stablecoins/fiat/unique-fiat-count', data_dict_uf, cf_distribution_id, invalidate=False)
+
         ### per-fiat token timeseries (single query for all fiats)
         df_token = execute_jinja_query(db_connector, "api/quick_bites/stables_fiat_token_timeseries.sql.j2", {"chains": chains}, True)
 
@@ -462,7 +509,6 @@ def run_dag():
         dict_fiat_dropdown = {"dropdown_values": fiat_dropdown_list}
         dict_fiat_dropdown = fix_dict_nan(dict_fiat_dropdown, 'fiat_dropdown', send_notification=False)
         upload_json_to_cf_s3(s3_bucket, 'v1/quick-bites/stablecoins/dropdown-fiat', dict_fiat_dropdown, cf_distribution_id, invalidate=False)
-
 
     @task
     def invalidate_cloudfront_cache():

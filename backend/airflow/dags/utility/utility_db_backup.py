@@ -26,7 +26,13 @@ def backup():
         from src.db_connector import DbConnector
 
         db_connector = DbConnector()
-        tables = ['fact_kpis', 'fact_kpis_apps', 'sys_main_conf', 'sys_rpc_config', 'oli_oss_directory', 'sys_l2beat']
+        tables = [
+                    'fact_kpis', 'fact_kpis_apps', 'fact_da_consumers', 'fact_stables_v2',
+                    'eim_fact', 'eim_holders_balance', 'eim_holders',
+                    'sys_main_conf', 'sys_rpc_config', 'sys_l2beat', 'sys_economics_mapping', 'sys_stables_v2',
+                    'oli_oss_directory', 'oli_categories', 'oli_categories_main', 'oli_tags', 'oli_trust_table',
+                    'highlights', 'metric_sources', 'robinhood_stock_list',
+                    'blockspace_fact_category_level']
 
         time_str = datetime.now().isoformat()[:10]
         bucket_name = os.getenv("S3_LONG_TERM_BUCKET")

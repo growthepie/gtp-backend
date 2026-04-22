@@ -15,7 +15,7 @@ class AdapterDefillama(AbstractAdapter):
         self.base_url = 'https://api.llama.fi/'
         self.stables = {
             'Tether': 1,
-            'Circle': 2,
+            'Circle USDC': 2,
         }
         self.stables_dfs = self.get_stables_dfs()
         self.df_ethereum = self.get_total_stables_fees_df()

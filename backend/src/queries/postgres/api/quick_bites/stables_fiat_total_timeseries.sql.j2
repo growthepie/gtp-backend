@@ -1,8 +1,8 @@
 SELECT
-    "date",
+    DATE_TRUNC('week', "date") AS date,
     fiat,
     SUM(value_usd) AS total_value_usd
 FROM public.vw_fact_stables_mcap_v2
 {% if chains %}WHERE origin_key = ANY(ARRAY['{{ chains | join("', '") }}']::varchar[]){% endif %}
-GROUP BY "date", fiat
-ORDER BY "date", fiat;
+GROUP BY DATE_TRUNC('week', "date"), fiat
+ORDER BY date, fiat;

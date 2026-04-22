@@ -90,7 +90,7 @@ def run_dag():
 
         # get data from defillama adapter
         ll = AdapterDefillama({}, db_connector)
-        df1 = ll.df_ethereum.loc[ll.df_ethereum['protocol'] == 'Circle']
+        df1 = ll.df_ethereum.loc[ll.df_ethereum['protocol'] == 'Circle USDC']
         df2 = ll.stables_dfs[2]
         df_merged = df1.merge(df2, how='left', left_on='unix', right_on='unix')
         df_merged['rev_per_usdc'] = df_merged['value'] / df_merged['circ_total']
