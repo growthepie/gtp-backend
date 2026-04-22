@@ -14,7 +14,7 @@ from src.misc.airflow_utils import alert_via_webhook, claude_fix_on_failure
     dag_id='oli_automated_labeler',
     description='AI-based labeling of unlabeled contracts, with OLI attestation',
     tags=['oli', 'daily', 'labeling'],
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2026, 4, 22),
     schedule='30 01 * * 1',  # 1:30am UTC every Monday — after oli_airtable (00:50) refreshes materialized views
 )
 def etl():
