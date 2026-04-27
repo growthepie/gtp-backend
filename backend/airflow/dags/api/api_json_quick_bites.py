@@ -248,7 +248,118 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'arbitrum-timeboost')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/arbitrum-timeboost', data_dict, cf_distribution_id)
-        
+
+    @task()
+    def run_arbitrum_timeboost_alerts():
+        """
+        Discord alerts for the Arbitrum Timeboost Quick Bite:
+          - cumulative priority-fee revenue (USD) crossing each $1,000,000 multiple
+          - cumulative priority-fee revenue (ETH) crossing each 1,000 ETH multiple
+          - new daily all-time-high in priority-fee revenue (ETH)
+        Source: public.fact_kpis (origin_key='arbitrum'). Self-contained: no state
+        table; relies on the daily DAG cadence for one-shot firing.
+        """
+        import os
+        import pandas as pd
+        from datetime import datetime, timezone
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.misc.jinja_helper import execute_jinja_query
+        from src.db_connector import DbConnector
+
+        db_connector = DbConnector()
+        qb_url = "https://www.growthepie.com/quick-bites/arbitrum-timeboost"
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+        days_back = (datetime.now(timezone.utc) - datetime(2025, 4, 10, tzinfo=timezone.utc)).days
+
+        def _load(metric_key):
+            params = {'origin_key': 'arbitrum', 'metric_key': metric_key, 'days': days_back}
+            df = execute_jinja_query(db_connector, "api/select_fact_kpis.sql.j2", params, return_df=True)
+            if df is None or df.empty:
+                return df
+            df['date'] = pd.to_datetime(df['date'])
+            df['value'] = pd.to_numeric(df['value'], errors='coerce').fillna(0)
+            return df.sort_values('date').reset_index(drop=True)
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"timeboost_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        def _check_cum_milestone(df, threshold, unit_label, value_fmt, label):
+            if df is None or df.empty:
+                print(f"No data for {label}; skipping.")
+                return
+            latest_day = df['date'].iloc[-1]
+            latest_value = float(df['value'].iloc[-1])
+            cum_total = float(df['value'].sum())
+            cum_prior = cum_total - latest_value
+            n_now = int(cum_total // threshold)
+            n_before = int(cum_prior // threshold)
+            if n_now > n_before:
+                milestone_value = n_now * threshold
+                crossed_count = n_now - n_before
+                crossed_extra = "" if crossed_count == 1 else f" (crossed {crossed_count} milestones in one day)"
+                message = (
+                    f"🥧 **Arbitrum Timeboost — crossed `{value_fmt(milestone_value)}` cumulative {unit_label} milestone**{crossed_extra}\n"
+                    f"Cumulative total now `{value_fmt(cum_total)}` "
+                    f"(was `{value_fmt(cum_prior)}` before {latest_day.date()}'s `{value_fmt(latest_value)}`)\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                image_paths = _maybe_screenshot(label)
+                send_discord_message(message, webhook_url, image_paths=image_paths)
+            else:
+                print(f"ℹ️ {label}: cumulative {value_fmt(cum_total)} below next milestone.")
+
+        ## cumulative USD: every $1,000,000
+        df_usd = _load('fees_paid_priority_usd')
+        _check_cum_milestone(
+            df_usd,
+            threshold=1_000_000,
+            unit_label="USD revenue",
+            value_fmt=lambda v: f"${v:,.0f}",
+            label="usd_cum_1m",
+        )
+
+        ## cumulative ETH: every 1,000 ETH
+        df_eth = _load('fees_paid_priority_eth')
+        _check_cum_milestone(
+            df_eth,
+            threshold=1_000,
+            unit_label="ETH revenue",
+            value_fmt=lambda v: f"{v:,.2f} ETH",
+            label="eth_cum_1k",
+        )
+
+        ## daily ATH in ETH
+        if df_eth is None or df_eth.empty:
+            print("No ETH data; skipping daily ATH check.")
+        else:
+            latest_day = df_eth['date'].iloc[-1]
+            latest_value = float(df_eth['value'].iloc[-1])
+            prior = df_eth[df_eth['date'] < latest_day]
+            if prior.empty:
+                print("ℹ️ daily ETH ATH: only one day of data — no prior max to compare.")
+            else:
+                prior_max = float(prior['value'].max())
+                if latest_value > prior_max:
+                    if prior_max > 0:
+                        delta_str = f"(prior daily max `{prior_max:,.2f} ETH`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                    else:
+                        delta_str = "(first recorded high)"
+                    message = (
+                        f"🥧 **New daily ATH — Arbitrum Timeboost priority-fee revenue (ETH)**\n"
+                        f"`{latest_value:,.2f} ETH` on {latest_day.date()} {delta_str}\n"
+                        f"[View on growthepie.com]({qb_url})"
+                    )
+                    image_paths = _maybe_screenshot("daily_eth_ath")
+                    send_discord_message(message, webhook_url, image_paths=image_paths)
+                else:
+                    print(f"ℹ️ daily ETH ATH: latest {latest_value:.4f} ≤ prior max {prior_max:.4f}.")
+
     @task()
     def run_shopify_usdc():
         import datetime
@@ -676,7 +787,9 @@ def json_creation():
     pectra_fork = run_pectra_fork()
     pectra_alerts = run_pectra_type4_ath_alerts()
     pectra_fork >> pectra_alerts
-    run_arbitrum_timeboost()
+    timeboost = run_arbitrum_timeboost()
+    timeboost_alerts = run_arbitrum_timeboost_alerts()
+    timeboost >> timeboost_alerts
     run_shopify_usdc()
     run_ethereum_scaling()
     run_network_graph()
