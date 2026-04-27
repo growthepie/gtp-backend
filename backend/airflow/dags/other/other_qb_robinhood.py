@@ -377,6 +377,180 @@ def run_dag():
         from src.misc.helper_functions import empty_cloudfront_cache
         empty_cloudfront_cache(cf_distribution_id, '/v1/quick-bites/robinhood/*')
     
+    @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
+    def run_robinhood_alerts():
+        """
+        Discord alerts for the Robinhood Stocks Quick Bite:
+          - total tokenized stock supply (sum of `total_supply` across active stocks)
+            crossing each 1,000 milestone
+          - total market value (USD) crossing each $10,000,000 milestone
+          - 7-day % change in total market value crossing above +20% (rising edge only)
+        Source: existing robinhood_totals_daily.sql.j2 plus an inline query for total
+        supply. Self-contained: no state table; for the +20% alert, we compare today's
+        7d % change to yesterday's so we only fire on the day it crosses upward.
+        """
+        import os
+        import pandas as pd
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.misc.jinja_helper import execute_jinja_query
+        from src.db_connector import DbConnector
+
+        db_connector = DbConnector()
+        qb_url = "https://www.growthepie.com/quick-bites/robinhood-stock"
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"robinhood_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        def _fmt_usd(v): return f"${v:,.0f}"
+        def _fmt_int(v): return f"{int(v):,}"
+
+        ## ---- daily total tokenized stock supply (across all active stocks) ----
+        supply_query = """
+            WITH date_range AS (
+                SELECT generate_series(
+                    (SELECT MIN(date) FROM public.robinhood_daily),
+                    CURRENT_DATE - INTERVAL '1 day',
+                    '1 day'::interval
+                )::date as date
+            ),
+            all_stocks AS (
+                SELECT contract_address
+                FROM public.robinhood_stock_list
+                WHERE active = TRUE
+            ),
+            grid AS (
+                SELECT s.contract_address, d.date
+                FROM all_stocks s CROSS JOIN date_range d
+            ),
+            daily_metrics AS (
+                SELECT
+                    contract_address,
+                    date,
+                    SUM(CASE WHEN metric_key = 'total_minted' THEN value ELSE 0 END) -
+                    SUM(CASE WHEN metric_key = 'total_burned' THEN value ELSE 0 END) AS net_change
+                FROM public.robinhood_daily
+                WHERE metric_key IN ('total_minted', 'total_burned')
+                GROUP BY contract_address, date
+            ),
+            joined AS (
+                SELECT g.contract_address, g.date, COALESCE(dm.net_change, 0) AS net_change
+                FROM grid g
+                LEFT JOIN daily_metrics dm
+                    ON g.contract_address = dm.contract_address AND g.date = dm.date
+            ),
+            cum AS (
+                SELECT
+                    contract_address,
+                    date,
+                    SUM(net_change) OVER (
+                        PARTITION BY contract_address
+                        ORDER BY date
+                        ROWS UNBOUNDED PRECEDING
+                    ) AS total_supply
+                FROM joined
+            )
+            SELECT date, SUM(total_supply) AS total_stocks_tokenized
+            FROM cum
+            GROUP BY date
+            ORDER BY date;
+        """
+        df_supply = db_connector.execute_query(supply_query, load_df=True)
+
+        if df_supply is None or df_supply.empty:
+            print("No supply data; skipping supply milestone.")
+        else:
+            df_supply['date'] = pd.to_datetime(df_supply['date'])
+            df_supply['total_stocks_tokenized'] = pd.to_numeric(
+                df_supply['total_stocks_tokenized'], errors='coerce'
+            ).fillna(0)
+            df_supply = df_supply.sort_values('date').reset_index(drop=True)
+
+            latest_day = df_supply['date'].iloc[-1]
+            latest_supply = float(df_supply['total_stocks_tokenized'].iloc[-1])
+            prior = df_supply[df_supply['date'] < latest_day]
+            prior_supply = float(prior['total_stocks_tokenized'].iloc[-1]) if not prior.empty else 0.0
+            threshold = 1_000
+            n_now = int(latest_supply // threshold)
+            n_before = int(prior_supply // threshold)
+            if n_now > n_before:
+                milestone = n_now * threshold
+                crossed = n_now - n_before
+                extra = "" if crossed == 1 else f" (crossed {crossed} milestones in one day)"
+                message = (
+                    f"🥧 **Robinhood Stocks — crossed `{_fmt_int(milestone)}` total tokenized stocks milestone**{extra}\n"
+                    f"Total now `{_fmt_int(latest_supply)}` (was `{_fmt_int(prior_supply)}` before {latest_day.date()})\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("supply_1k"))
+            else:
+                print(f"ℹ️ supply_1k: total {_fmt_int(latest_supply)} below next milestone.")
+
+        ## ---- daily total market value milestone ($10M) ----
+        df_tot = execute_jinja_query(
+            db_connector,
+            "api/quick_bites/robinhood_totals_daily.sql.j2",
+            query_parameters={},
+            return_df=True,
+        )
+
+        if df_tot is None or df_tot.empty:
+            print("No totals data; skipping market value milestone & 7d alert.")
+            return
+
+        df_tot['date'] = pd.to_datetime(df_tot['date'])
+        df_tot['total_market_value_sum'] = pd.to_numeric(
+            df_tot['total_market_value_sum'], errors='coerce'
+        ).fillna(0)
+        df_tot = df_tot.sort_values('date').reset_index(drop=True)
+
+        latest_day = df_tot['date'].iloc[-1]
+        latest_value = float(df_tot['total_market_value_sum'].iloc[-1])
+        prior = df_tot[df_tot['date'] < latest_day]
+        prior_value = float(prior['total_market_value_sum'].iloc[-1]) if not prior.empty else 0.0
+
+        threshold = 10_000_000
+        n_now = int(latest_value // threshold)
+        n_before = int(prior_value // threshold)
+        if n_now > n_before:
+            milestone = n_now * threshold
+            crossed = n_now - n_before
+            extra = "" if crossed == 1 else f" (crossed {crossed} milestones in one day)"
+            message = (
+                f"🥧 **Robinhood Stocks — crossed `{_fmt_usd(milestone)}` total market value milestone**{extra}\n"
+                f"Total now `{_fmt_usd(latest_value)}` (was `{_fmt_usd(prior_value)}` before {latest_day.date()})\n"
+                f"[View on growthepie.com]({qb_url})"
+            )
+            send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("mv_10m"))
+        else:
+            print(f"ℹ️ mv_10m: total {_fmt_usd(latest_value)} below next milestone.")
+
+        ## ---- 7-day % change crossing above +20% (rising edge) ----
+        if len(df_tot) < 9:
+            print("ℹ️ 7d alert: need at least 9 days of data for crossing comparison.")
+        else:
+            df_tot['pct_7d'] = df_tot['total_market_value_sum'].pct_change(periods=7) * 100
+            latest_pct = df_tot['pct_7d'].iloc[-1]
+            prior_pct = df_tot['pct_7d'].iloc[-2]
+            if pd.isna(latest_pct) or pd.isna(prior_pct):
+                print(f"ℹ️ 7d alert: insufficient data (latest={latest_pct}, prior={prior_pct}).")
+            elif prior_pct <= 20.0 and latest_pct > 20.0:
+                message = (
+                    f"🥧 **Robinhood Stocks — 7-day total market value change crossed above +20%**\n"
+                    f"Now `+{latest_pct:.2f}%` on {latest_day.date()} (yesterday `{prior_pct:+.2f}%`)\n"
+                    f"Total market value now `{_fmt_usd(latest_value)}`\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("pct7d_20"))
+            else:
+                print(f"ℹ️ 7d alert: latest {latest_pct:+.2f}%, prior {prior_pct:+.2f}% — no upward crossing of +20%.")
+
     # temporary to be removed once Phase 2 launches
     @task()
     def notification_in_case_of_transfer():
@@ -409,15 +583,17 @@ def run_dag():
     # Create task instances
     branch_task = decide_branch()
     pull_dune = pull_data_from_dune()
-    pull_yfinance = pull_data_from_yfinance() 
+    pull_yfinance = pull_data_from_yfinance()
     create_jsons = create_json_file()
     alert_system = notification_in_case_of_transfer()
+    qb_alerts = run_robinhood_alerts()
 
     # Define execution order with branching
     branch_task >> [json_only_branch, full_pipeline_branch]
-    
+
     # Both branches lead to create_json_file
     json_only_branch >> create_jsons
     full_pipeline_branch >> pull_dune >> pull_yfinance >> alert_system >> create_jsons
+    create_jsons >> qb_alerts
 
 run_dag()
