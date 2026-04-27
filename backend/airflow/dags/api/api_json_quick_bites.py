@@ -425,7 +425,221 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'shopify-usdc')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/shopify-usdc', data_dict, cf_distribution_id)
-        
+
+    @task()
+    def run_shopify_usdc_alerts():
+        """
+        Discord alerts for the Base Commerce / Shopify USDC Quick Bite:
+          - cumulative gross_volume_usdc crossing each $1,000,000 multiple
+          - total_unique_payers crossing each 1,000 multiple (running-total metric)
+          - new daily ATH in gross_volume_usdc
+          - new daily ATH in returning_payers
+          - new weekly ATH in returning_payers (fires only on Monday — first day of new ISO week)
+          - new monthly ATH in returning_payers (fires only on the 1st of the month)
+        Source: public.fact_kpis (origin_key='shopify_usdc'). Self-contained: no
+        state table; weekly/monthly are gated to boundary days to avoid spam.
+        """
+        import os
+        import pandas as pd
+        from datetime import datetime, timezone
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.misc.jinja_helper import execute_jinja_query
+        from src.db_connector import DbConnector
+
+        db_connector = DbConnector()
+        qb_url = "https://www.growthepie.com/quick-bites/base-commerce"
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+        days_back = (datetime.now(timezone.utc) - datetime(2025, 6, 1, tzinfo=timezone.utc)).days
+
+        def _load(metric_key):
+            params = {'origin_key': 'shopify_usdc', 'metric_key': metric_key, 'days': days_back}
+            df = execute_jinja_query(db_connector, "api/select_fact_kpis.sql.j2", params, return_df=True)
+            if df is None or df.empty:
+                return df
+            df['date'] = pd.to_datetime(df['date'])
+            df['value'] = pd.to_numeric(df['value'], errors='coerce').fillna(0)
+            return df.sort_values('date').reset_index(drop=True)
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"shopify_usdc_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        def _fmt_usd(v): return f"${v:,.0f}"
+        def _fmt_int(v): return f"{int(v):,}"
+
+        ## cumulative USD volume milestone ($1M)
+        df_vol = _load('gross_volume_usdc')
+        if df_vol is None or df_vol.empty:
+            print("No gross_volume_usdc data; skipping USD milestone & daily ATH.")
+        else:
+            latest_day = df_vol['date'].iloc[-1]
+            latest_value = float(df_vol['value'].iloc[-1])
+            cum_total = float(df_vol['value'].sum())
+            cum_prior = cum_total - latest_value
+            threshold = 1_000_000
+            n_now = int(cum_total // threshold)
+            n_before = int(cum_prior // threshold)
+            if n_now > n_before:
+                milestone = n_now * threshold
+                crossed = n_now - n_before
+                extra = "" if crossed == 1 else f" (crossed {crossed} milestones in one day)"
+                message = (
+                    f"🥧 **Base Commerce — crossed `{_fmt_usd(milestone)}` cumulative USDC volume settled milestone**{extra}\n"
+                    f"Cumulative total now `{_fmt_usd(cum_total)}` "
+                    f"(was `{_fmt_usd(cum_prior)}` before {latest_day.date()}'s `{_fmt_usd(latest_value)}`)\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("usd_cum_1m"))
+            else:
+                print(f"ℹ️ usd_cum_1m: cumulative {_fmt_usd(cum_total)} below next milestone.")
+
+            ## daily USDC settled ATH
+            prior = df_vol[df_vol['date'] < latest_day]
+            if prior.empty:
+                print("ℹ️ daily USDC ATH: only one day of data.")
+            else:
+                prior_max = float(prior['value'].max())
+                if latest_value > prior_max:
+                    if prior_max > 0:
+                        delta_str = f"(prior daily max `{_fmt_usd(prior_max)}`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                    else:
+                        delta_str = "(first recorded high)"
+                    message = (
+                        f"🥧 **New daily ATH — Base Commerce USDC volume settled**\n"
+                        f"`{_fmt_usd(latest_value)}` on {latest_day.date()} {delta_str}\n"
+                        f"[View on growthepie.com]({qb_url})"
+                    )
+                    send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("daily_usdc_ath"))
+                else:
+                    print(f"ℹ️ daily USDC ATH: latest {_fmt_usd(latest_value)} ≤ prior max {_fmt_usd(prior_max)}.")
+
+        ## total unique customers milestone (1,000) — total_unique_payers is a running total
+        df_cust = _load('total_unique_payers')
+        if df_cust is None or df_cust.empty:
+            print("No total_unique_payers data; skipping customer milestone.")
+        else:
+            latest_day = df_cust['date'].iloc[-1]
+            latest_value = float(df_cust['value'].iloc[-1])
+            prior = df_cust[df_cust['date'] < latest_day]
+            prior_value = float(prior['value'].iloc[-1]) if not prior.empty else 0.0
+            threshold = 1_000
+            n_now = int(latest_value // threshold)
+            n_before = int(prior_value // threshold)
+            if n_now > n_before:
+                milestone = n_now * threshold
+                crossed = n_now - n_before
+                extra = "" if crossed == 1 else f" (crossed {crossed} milestones in one day)"
+                message = (
+                    f"🥧 **Base Commerce — crossed `{_fmt_int(milestone)}` total unique customers milestone**{extra}\n"
+                    f"Total now `{_fmt_int(latest_value)}` (was `{_fmt_int(prior_value)}` before {latest_day.date()})\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("customers_1k"))
+            else:
+                print(f"ℹ️ customers_1k: total {_fmt_int(latest_value)} below next milestone.")
+
+        ## returning_payers: daily / weekly / monthly ATH
+        df_ret = _load('returning_payers')
+        if df_ret is None or df_ret.empty:
+            print("No returning_payers data; skipping ATH checks.")
+            return
+
+        ## daily ATH (returning customers)
+        latest_day = df_ret['date'].iloc[-1]
+        latest_value = float(df_ret['value'].iloc[-1])
+        prior = df_ret[df_ret['date'] < latest_day]
+        if prior.empty:
+            print("ℹ️ daily returning ATH: only one day of data.")
+        else:
+            prior_max = float(prior['value'].max())
+            if latest_value > prior_max:
+                if prior_max > 0:
+                    delta_str = f"(prior daily max `{_fmt_int(prior_max)}`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                else:
+                    delta_str = "(first recorded high)"
+                message = (
+                    f"🥧 **New daily ATH — Base Commerce returning customers**\n"
+                    f"`{_fmt_int(latest_value)}` on {latest_day.date()} {delta_str}\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("daily_returning_ath"))
+            else:
+                print(f"ℹ️ daily returning ATH: latest {_fmt_int(latest_value)} ≤ prior max {_fmt_int(prior_max)}.")
+
+        today_utc = datetime.now(timezone.utc).date()
+
+        ## weekly ATH (returning customers) — only on Monday (first day of new ISO week)
+        if today_utc.weekday() == 0:
+            df_w = df_ret.copy()
+            df_w['week_start'] = df_w['date'].dt.to_period('W-SUN').dt.start_time  # Mon–Sun weeks
+            cutoff = pd.Timestamp(today_utc)
+            df_w = df_w[df_w['week_start'] + pd.Timedelta(days=7) <= cutoff]  # only completed weeks
+            weekly = df_w.groupby('week_start', as_index=False)['value'].sum().sort_values('week_start')
+            if weekly.empty:
+                print("ℹ️ weekly returning ATH: no completed weeks of data.")
+            else:
+                latest_ws = weekly['week_start'].iloc[-1]
+                latest_wv = float(weekly['value'].iloc[-1])
+                prior_w = weekly[weekly['week_start'] < latest_ws]
+                if prior_w.empty:
+                    print("ℹ️ weekly returning ATH: only one week of data.")
+                else:
+                    prior_max = float(prior_w['value'].max())
+                    if latest_wv > prior_max:
+                        if prior_max > 0:
+                            delta_str = f"(prior weekly max `{_fmt_int(prior_max)}`, +{((latest_wv - prior_max) / prior_max * 100):.1f}%)"
+                        else:
+                            delta_str = "(first recorded high)"
+                        week_end = latest_ws + pd.Timedelta(days=6)
+                        message = (
+                            f"🥧 **New weekly ATH — Base Commerce returning customers**\n"
+                            f"`{_fmt_int(latest_wv)}` for week of {latest_ws.date()} – {week_end.date()} {delta_str}\n"
+                            f"[View on growthepie.com]({qb_url})"
+                        )
+                        send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("weekly_returning_ath"))
+                    else:
+                        print(f"ℹ️ weekly returning ATH: latest {_fmt_int(latest_wv)} ≤ prior max {_fmt_int(prior_max)}.")
+        else:
+            print(f"ℹ️ weekly returning ATH skipped (today {today_utc} not Monday).")
+
+        ## monthly ATH (returning customers) — only on day 1 of new month
+        if today_utc.day == 1:
+            df_m = df_ret.copy()
+            df_m['month_start'] = df_m['date'].dt.to_period('M').dt.start_time
+            current_month_start = pd.Timestamp(today_utc.replace(day=1))
+            df_m = df_m[df_m['month_start'] < current_month_start]  # only completed months
+            monthly = df_m.groupby('month_start', as_index=False)['value'].sum().sort_values('month_start')
+            if monthly.empty:
+                print("ℹ️ monthly returning ATH: no completed months of data.")
+            else:
+                latest_ms = monthly['month_start'].iloc[-1]
+                latest_mv = float(monthly['value'].iloc[-1])
+                prior_m = monthly[monthly['month_start'] < latest_ms]
+                if prior_m.empty:
+                    print("ℹ️ monthly returning ATH: only one month of data.")
+                else:
+                    prior_max = float(prior_m['value'].max())
+                    if latest_mv > prior_max:
+                        if prior_max > 0:
+                            delta_str = f"(prior monthly max `{_fmt_int(prior_max)}`, +{((latest_mv - prior_max) / prior_max * 100):.1f}%)"
+                        else:
+                            delta_str = "(first recorded high)"
+                        message = (
+                            f"🥧 **New monthly ATH — Base Commerce returning customers**\n"
+                            f"`{_fmt_int(latest_mv)}` for {latest_ms.strftime('%B %Y')} {delta_str}\n"
+                            f"[View on growthepie.com]({qb_url})"
+                        )
+                        send_discord_message(message, webhook_url, image_paths=_maybe_screenshot("monthly_returning_ath"))
+                    else:
+                        print(f"ℹ️ monthly returning ATH: latest {_fmt_int(latest_mv)} ≤ prior max {_fmt_int(prior_max)}.")
+        else:
+            print(f"ℹ️ monthly returning ATH skipped (today {today_utc} day {today_utc.day}, not 1st).")
+
     @task()
     def run_ethereum_scaling():
         ## TODO: have projection update? but not guaranteed that we'll hit 10k TPS in same timeframe...
@@ -790,7 +1004,9 @@ def json_creation():
     timeboost = run_arbitrum_timeboost()
     timeboost_alerts = run_arbitrum_timeboost_alerts()
     timeboost >> timeboost_alerts
-    run_shopify_usdc()
+    shopify = run_shopify_usdc()
+    shopify_alerts = run_shopify_usdc_alerts()
+    shopify >> shopify_alerts
     run_ethereum_scaling()
     run_network_graph()
     run_app_count()
