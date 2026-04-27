@@ -753,7 +753,91 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'ethereum-scaling')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/ethereum-scaling/data', data_dict, cf_distribution_id)
-    
+
+    @task()
+    def run_ethereum_scaling_alerts():
+        """
+        Discord alert when the required multiplier to reach 10k TPS on Ethereum L1
+        crosses below a new multiple of 50x (e.g. 1000x → 950x → 900x …).
+        Compares today's view (data through yesterday) to yesterday's view (data
+        through 2 days ago) using the same monthly aggregation the QB itself uses.
+        Fires only on downward 50x boundary crossings of the multiplier.
+        Self-contained: no state table; re-derives "yesterday's value" from source.
+        """
+        import os
+        import pandas as pd
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.db_connector import DbConnector
+
+        db_connector = DbConnector()
+        qb_url = "https://www.growthepie.com/quick-bites/ethereum-scaling"
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+        TARGET_TPS = 10_000
+        STEP = 50
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"eth_scaling_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        def _latest_month_tps(cutoff_sql):
+            """Run the QB's monthly TPS aggregation with a date cutoff; return (month, tps)."""
+            query = f"""
+                SELECT
+                    date_trunc('month', date) AS month,
+                    (AVG(value) FILTER (WHERE metric_key = 'gas_limit'))
+                        / NULLIF(AVG(value) FILTER (WHERE metric_key = 'block_time_seconds'), 0)
+                        / 100000 / 2 AS tps
+                FROM public.fact_kpis
+                WHERE metric_key IN ('gas_limit', 'block_time_seconds')
+                  AND origin_key = 'ethereum'
+                  AND date < {cutoff_sql}
+                GROUP BY 1
+                ORDER BY 1 DESC
+                LIMIT 1
+            """
+            df = db_connector.execute_query(query, load_df=True)
+            if df is None or df.empty or pd.isna(df.iloc[0]['tps']):
+                return None, None
+            return pd.to_datetime(df.iloc[0]['month']), float(df.iloc[0]['tps'])
+
+        today_month, today_tps = _latest_month_tps("CURRENT_DATE")
+        prior_month, prior_tps = _latest_month_tps("CURRENT_DATE - INTERVAL '1 day'")
+
+        if today_tps is None or prior_tps is None or today_tps <= 0 or prior_tps <= 0:
+            print(f"ℹ️ insufficient TPS data (today={today_tps}, prior={prior_tps}); skipping.")
+            return
+
+        today_mult = TARGET_TPS / today_tps
+        prior_mult = TARGET_TPS / prior_tps
+
+        bucket_today = int(today_mult // STEP)
+        bucket_prior = int(prior_mult // STEP)
+
+        if today_mult < prior_mult and bucket_today < bucket_prior:
+            new_threshold = (bucket_today + 1) * STEP
+            crossed_count = bucket_prior - bucket_today
+            extra = "" if crossed_count == 1 else f" (crossed {crossed_count} 50x boundaries in one day)"
+            month_note = ""
+            if today_month is not None and prior_month is not None and today_month != prior_month:
+                month_note = f" — new month rolled in ({prior_month.strftime('%b %Y')} → {today_month.strftime('%b %Y')})"
+            message = (
+                f"🥧 **Ethereum Scaling — required multiplier to reach 10k TPS dropped below `{new_threshold}x`**{extra}{month_note}\n"
+                f"Now `{today_mult:,.1f}x` (yesterday `{prior_mult:,.1f}x`)\n"
+                f"Latest monthly avg TPS `{today_tps:,.2f}` (prior view `{prior_tps:,.2f}`)\n"
+                f"[View on growthepie.com]({qb_url})"
+            )
+            send_discord_message(message, webhook_url, image_paths=_maybe_screenshot(f"mult_{new_threshold}x"))
+        else:
+            print(
+                f"ℹ️ no downward 50x crossing: today={today_mult:.1f}x (bucket {bucket_today}), "
+                f"yesterday={prior_mult:.1f}x (bucket {bucket_prior})."
+            )
+
     @task()
     def run_app_count():
         import datetime
@@ -1007,7 +1091,9 @@ def json_creation():
     shopify = run_shopify_usdc()
     shopify_alerts = run_shopify_usdc_alerts()
     shopify >> shopify_alerts
-    run_ethereum_scaling()
+    eth_scaling = run_ethereum_scaling()
+    eth_scaling_alerts = run_ethereum_scaling_alerts()
+    eth_scaling >> eth_scaling_alerts
     run_network_graph()
     run_app_count()
 
