@@ -522,9 +522,154 @@ def run_dag():
         empty_cloudfront_cache(cf_distribution_id, '/v1/quick-bites/fusaka/*')
 
 
+    @task
+    def run_fusaka_alerts():
+        """
+        Discord alerts for the Fusaka Quick Bite (Ethereum L1 blob/gas metrics):
+          - new daily ATH for avg blob target (per-block target_blob_count)
+          - new daily ATH for avg blob count (per-block blob count)
+          - new daily ATH for gas limit (per-block avg)
+          - new daily ATH for gas used (per-block avg)
+          - total blob count since Dencun crossing each 5,000,000 milestone
+          - total blob fees paid since Dencun crossing each 1,000 ETH milestone
+        Source: public.ethereum_blocks. Self-contained: no state table; gated to
+        the early-morning DAG run (UTC hour < 4) so the same alert doesn't fire
+        on every 8-hour run during the day.
+        """
+        import os
+        from datetime import datetime, timezone
+        import pandas as pd
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.db_connector import DbConnector
+
+        current_hour = datetime.now(timezone.utc).hour
+        if current_hour >= 4:
+            print(f"Skipping fusaka alerts: UTC hour {current_hour} not in early-morning window (< 4).")
+            return
+
+        db_connector = DbConnector()
+        qb_url = "https://www.growthepie.com/quick-bites/fusaka"
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+        DENCUN_BLOCK = 19426587  # matches rel_block_ranges entry above
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"fusaka_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        def _fmt_int(v): return f"{int(v):,}"
+        def _fmt_eth(v): return f"{v:,.2f} ETH"
+        def _fmt_2dp(v): return f"{v:,.2f}"
+
+        ## ---- daily ATH series (blob & gas) since Dencun ----
+        daily_query = f"""
+            SELECT
+                block_date AS day,
+                AVG(blob_gas_used::NUMERIC / 1024 / 128) AS avg_blob_count,
+                AVG(target_blob_gas::NUMERIC / 1024 / 128) AS avg_target_blob_count,
+                SUM(gas_used::NUMERIC) / NULLIF(COUNT(*), 0) AS avg_gas_used,
+                SUM(gas_limit::NUMERIC) / NULLIF(COUNT(*), 0) AS avg_gas_limit
+            FROM public.ethereum_blocks
+            WHERE
+                "number" >= {DENCUN_BLOCK}
+                AND block_date < CURRENT_DATE
+            GROUP BY block_date
+            ORDER BY block_date ASC
+        """
+        df_daily = db_connector.execute_query(daily_query, load_df=True)
+
+        if df_daily is None or df_daily.empty:
+            print("No daily blob/gas data since Dencun; skipping ATH checks.")
+        else:
+            df_daily['day'] = pd.to_datetime(df_daily['day'])
+            for col in ['avg_blob_count', 'avg_target_blob_count', 'avg_gas_used', 'avg_gas_limit']:
+                df_daily[col] = pd.to_numeric(df_daily[col], errors='coerce')
+            df_daily = df_daily.sort_values('day').reset_index(drop=True)
+
+            ath_checks = [
+                ('avg_target_blob_count', "blob target (per-block)",   _fmt_2dp,  "blob_target_ath"),
+                ('avg_blob_count',        "avg blob count (per-block)", _fmt_2dp, "blob_count_ath"),
+                ('avg_gas_limit',         "gas limit (per-block avg)",  _fmt_int, "gas_limit_ath"),
+                ('avg_gas_used',          "gas used (per-block avg)",   _fmt_int, "gas_used_ath"),
+            ]
+            latest_day = df_daily['day'].iloc[-1]
+            for col, friendly, fmt, label in ath_checks:
+                series = df_daily[['day', col]].dropna(subset=[col])
+                if series.empty:
+                    print(f"ℹ️ {label}: no data; skipping.")
+                    continue
+                latest_value = float(series[col].iloc[-1])
+                prior = series[series['day'] < latest_day]
+                if prior.empty:
+                    print(f"ℹ️ {label}: only one day of data — no prior max.")
+                    continue
+                prior_max = float(prior[col].max())
+                if latest_value > prior_max:
+                    if prior_max > 0:
+                        delta_str = f"(prior daily max `{fmt(prior_max)}`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                    else:
+                        delta_str = "(first recorded high)"
+                    message = (
+                        f"🥧 **New daily ATH — Ethereum L1 {friendly}**\n"
+                        f"`{fmt(latest_value)}` on {latest_day.date()} {delta_str}\n"
+                        f"[View on growthepie.com]({qb_url})"
+                    )
+                    send_discord_message(message, webhook_url, image_paths=_maybe_screenshot(label))
+                else:
+                    print(f"ℹ️ {label}: latest {fmt(latest_value)} ≤ prior max {fmt(prior_max)}.")
+
+        ## ---- cumulative milestones since Dencun ----
+        def _cum_totals(date_cutoff_sql):
+            query = f"""
+                SELECT
+                    FLOOR(SUM(blob_gas_used::NUMERIC) / 128 / 1024)::BIGINT AS total_blobs,
+                    SUM((blob_base_fee::NUMERIC * blob_gas_used::NUMERIC) / 1e18) AS total_blob_fees_eth
+                FROM public.ethereum_blocks
+                WHERE
+                    "number" >= {DENCUN_BLOCK}
+                    AND block_date < {date_cutoff_sql}
+            """
+            df = db_connector.execute_query(query, load_df=True)
+            if df is None or df.empty:
+                return {'total_blobs': 0.0, 'total_blob_fees_eth': 0.0}
+            row = df.iloc[0].to_dict()
+            return {k: float(v) if pd.notna(v) else 0.0 for k, v in row.items()}
+
+        today = _cum_totals("CURRENT_DATE")
+        prior = _cum_totals("CURRENT_DATE - INTERVAL '1 day'")
+
+        milestone_checks = [
+            # (key, threshold, label, fmt, headline)
+            ('total_blobs',          5_000_000, "blobs_5m_since_dencun",   _fmt_int, "Fusaka — crossed `{m}` total blob count milestone (since Dencun)"),
+            ('total_blob_fees_eth',  1_000,     "blob_fees_1k_since_dencun", _fmt_eth, "Fusaka — crossed `{m}` total blob fees paid milestone (since Dencun)"),
+        ]
+        for key, threshold, label, fmt, headline_tpl in milestone_checks:
+            t_now = float(today.get(key) or 0.0)
+            t_prior = float(prior.get(key) or 0.0)
+            n_now = int(t_now // threshold)
+            n_before = int(t_prior // threshold)
+            if n_now > n_before:
+                milestone = n_now * threshold
+                crossed = n_now - n_before
+                extra = "" if crossed == 1 else f" (crossed {crossed} milestones in one day)"
+                headline = headline_tpl.format(m=fmt(milestone))
+                message = (
+                    f"🥧 **{headline}**{extra}\n"
+                    f"Cumulative total now `{fmt(t_now)}` (was `{fmt(t_prior)}` as of yesterday)\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                send_discord_message(message, webhook_url, image_paths=_maybe_screenshot(label))
+            else:
+                print(f"ℹ️ {label}: {fmt(t_now)} below next milestone (n_now={n_now}, n_before={n_before}).")
+
     # DAG TASK DEPENDENCIES
     backfill_data = backfill_blob_base_fee()
     create_jsons_task = create_jsons()
-    backfill_data >> create_jsons_task
+    fusaka_alerts_task = run_fusaka_alerts()
+    backfill_data >> create_jsons_task >> fusaka_alerts_task
 
 run_dag()
