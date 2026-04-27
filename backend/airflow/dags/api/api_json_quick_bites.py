@@ -99,6 +99,109 @@ def json_creation():
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/pectra-fork', data_dict, cf_distribution_id)
 
     @task()
+    def run_pectra_type4_ath_alerts():
+        """
+        Discord alert when a new daily all-time-high is hit for type-4 (EIP-7702)
+        smart-wallet upgrade transactions — per chain and for all tracked chains
+        combined. Compares the latest finalized day to the prior max on the same
+        source view (public.fact_kpis, metric_key = 'txcount_type4'). Self-contained:
+        no state table, relies on the daily DAG cadence for one-shot firing.
+        """
+        import os
+        import pandas as pd
+        from src.misc.helper_functions import send_discord_message, generate_screenshot
+        from src.db_connector import DbConnector
+
+        db_connector = DbConnector()
+        chains = ['ethereum', 'optimism', 'base', 'unichain', 'arbitrum']
+        chain_list_sql = ", ".join(f"'{c}'" for c in chains)
+
+        query = f"""
+            SELECT
+                fk."date" AS day,
+                fk.origin_key,
+                fk.value
+            FROM public.fact_kpis fk
+            WHERE fk.metric_key = 'txcount_type4'
+              AND fk.origin_key IN ({chain_list_sql})
+              AND fk."date" >= DATE '2025-05-07'
+              AND fk."date" < CURRENT_DATE
+            ORDER BY fk."date" ASC
+        """
+        df = db_connector.execute_query(query, load_df=True)
+
+        if df is None or df.empty:
+            print("No type-4 data found; skipping ATH check.")
+            return
+
+        df['day'] = pd.to_datetime(df['day'])
+        df['value'] = pd.to_numeric(df['value'], errors='coerce').fillna(0)
+
+        qb_url = "https://www.growthepie.com/quick-bites/pectra-upgrade"
+
+        def _maybe_screenshot(label):
+            try:
+                fname = f"pectra_type4_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
+                generate_screenshot(qb_url, fname, width=1400, height=1200, wait_for_timeout=4000)
+                return f"generated_images/{fname}"
+            except Exception as e:
+                print(f"⚠️ Screenshot failed for {label}: {e}")
+                return None
+
+        webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+
+        ## per-chain daily ATH
+        for origin_key, df_chain in df.groupby('origin_key'):
+            df_chain = df_chain.sort_values('day')
+            latest_day = df_chain['day'].iloc[-1]
+            latest_value = float(df_chain['value'].iloc[-1])
+            prior = df_chain[df_chain['day'] < latest_day]
+            if prior.empty:
+                print(f"ℹ️ {origin_key}: only one day of data — no prior max to compare.")
+                continue
+            prior_max = float(prior['value'].max())
+            if latest_value > prior_max:
+                if prior_max > 0:
+                    delta_str = f"(prior daily max `{int(prior_max):,}`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                else:
+                    delta_str = "(first recorded high)"
+                message = (
+                    f"🥧 **New daily ATH — type-4 (EIP-7702) smart-wallet upgrade txs on `{origin_key.title()}`**\n"
+                    f"`{int(latest_value):,}` txs on {latest_day.date()} {delta_str}\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                image_paths = _maybe_screenshot(origin_key)
+                send_discord_message(message, webhook_url, image_paths=image_paths)
+            else:
+                print(f"ℹ️ {origin_key}: latest {int(latest_value):,} ≤ prior max {int(prior_max):,}.")
+
+        ## combined-all-chains daily ATH
+        df_total = df.groupby('day', as_index=False)['value'].sum().sort_values('day')
+        latest_day = df_total['day'].iloc[-1]
+        latest_value = float(df_total['value'].iloc[-1])
+        prior = df_total[df_total['day'] < latest_day]
+        if prior.empty:
+            print("ℹ️ combined: only one day of data — no prior max to compare.")
+        else:
+            prior_max = float(prior['value'].max())
+            if latest_value > prior_max:
+                if prior_max > 0:
+                    delta_str = f"(prior daily max `{int(prior_max):,}`, +{((latest_value - prior_max) / prior_max * 100):.1f}%)"
+                else:
+                    delta_str = "(first recorded high)"
+                chain_names = ", ".join(c.title() for c in chains)
+                message = (
+                    f"🥧 **New daily ATH — type-4 (EIP-7702) smart-wallet upgrade txs across all tracked chains**\n"
+                    f"`{int(latest_value):,}` txs on {latest_day.date()} {delta_str}\n"
+                    f"Chains: {chain_names}\n"
+                    f"[View on growthepie.com]({qb_url})"
+                )
+                image_paths = _maybe_screenshot("combined")
+                send_discord_message(message, webhook_url, image_paths=image_paths)
+            else:
+                print(f"ℹ️ combined: latest {int(latest_value):,} ≤ prior max {int(prior_max):,}.")
+
+    @task()
     def run_arbitrum_timeboost():
         import datetime
         import pandas as pd
@@ -570,7 +673,9 @@ def json_creation():
         df_dict = fix_dict_nan(df_dict, 'network graph')
         upload_json_to_cf_s3(s3_bucket, f'v1/misc/interop/data', df_dict, cf_distribution_id)
 
-    run_pectra_fork()    
+    pectra_fork = run_pectra_fork()
+    pectra_alerts = run_pectra_type4_ath_alerts()
+    pectra_fork >> pectra_alerts
     run_arbitrum_timeboost()
     run_shopify_usdc()
     run_ethereum_scaling()
