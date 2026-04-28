@@ -2482,10 +2482,10 @@ class JSONCreation():
                 GROUP BY 1,2,3,4,5,6
             )
             
-            select 
+            SELECT 
                 fact.*,
                 greatest(aa.daa, 1) AS daa
-            from apps_mat fact
+            FROM apps_mat fact
             LEFT JOIN (
                 SELECT 
                     address,
@@ -2500,6 +2500,32 @@ class JSONCreation():
                     and fact.date >= current_date - interval '{days} days'
                 GROUP BY 1, 2
             ) aa USING (address, origin_key)
+            
+            UNION ALL
+            
+            SELECT DISTINCT
+                l.address,
+                UPPER(LEFT(l.contract_name , 1)) || SUBSTRING(l.contract_name FROM 2) as name,
+                oli.main_category_id as main_category_key,
+                l.usage_category as sub_category_key,
+                l.origin_key,
+                vc.address IS NOT NULL AS verified,
+                0 AS txcount,
+                0 AS fees_paid_eth,
+                0 AS fees_paid_usd,
+                0 AS daa
+            FROM vw_oli_label_pool_gold_pivoted_v2 l
+            LEFT JOIN mv_verified_contracts vc USING (address)
+            left join oli_categories oli on l.usage_category = oli.category_id
+            WHERE 
+                l.owner_project = '{owner_project}'
+                AND l.origin_key IN  ({chains_str})
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM apps_mat fact
+                    WHERE fact.address = l.address
+                        AND fact.origin_key = l.origin_key
+                )
             ORDER BY fees_paid_eth desc
         """
         with self.db_connector.engine.connect() as connection:
