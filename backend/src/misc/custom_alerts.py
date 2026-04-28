@@ -954,7 +954,6 @@ def run_robinhood_alerts():
         all_stocks AS (
             SELECT contract_address
             FROM public.robinhood_stock_list
-            WHERE active = TRUE
         ),
         grid AS (
             SELECT s.contract_address, d.date
@@ -987,7 +986,7 @@ def run_robinhood_alerts():
                 ) AS total_supply
             FROM joined
         )
-        SELECT date, SUM(total_supply) AS total_stocks_tokenized
+        SELECT date, COUNT(*) FILTER (WHERE total_supply > 0) AS total_stocks_tokenized
         FROM cum
         GROUP BY date
         ORDER BY date
@@ -998,8 +997,8 @@ def run_robinhood_alerts():
         df_supply,
         date_col="date",
         value_col="total_stocks_tokenized",
-        threshold=1_000,
-        label="supply_1k",
+        threshold=100,
+        label="supply_100",
         title="Robinhood Stocks - crossed `{m}` total tokenized stocks milestone",
         fmt=fmt_int,
     )
@@ -1022,6 +1021,16 @@ def run_robinhood_alerts():
         threshold=10_000_000,
         label="mv_10m",
         title="Robinhood Stocks - crossed `{m}` total market value milestone",
+        fmt=fmt_usd,
+    )
+
+    maybe_send_ath_alert(
+        alerter,
+        df_totals,
+        date_col="date",
+        value_col="total_market_value_sum",
+        label="daily_mv_ath",
+        title="New daily ATH - Robinhood Stocks total value of tokenized shares",
         fmt=fmt_usd,
     )
 
