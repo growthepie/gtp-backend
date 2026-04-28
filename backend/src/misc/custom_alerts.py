@@ -27,10 +27,11 @@ def fmt_2dp(value: float) -> str:
 
 
 @dataclass
-class QuickBiteAlerter:
-    qb_url: str
+class Alerter:
+    url: str
     screenshot_prefix: str
     webhook_url: Optional[str] = None
+    alerter_type: Optional[str] = None
 
     def __post_init__(self):
         if self.webhook_url is None:
@@ -39,7 +40,7 @@ class QuickBiteAlerter:
     def _maybe_screenshot(self, label: str) -> Optional[str]:
         try:
             filename = f"{self.screenshot_prefix}_{label}_{pd.Timestamp.utcnow().strftime('%Y%m%d')}.png"
-            generate_screenshot(self.qb_url, filename, width=1400, height=1200, wait_for_timeout=4000)
+            generate_screenshot(self.url, filename, width=1400, height=1200, wait_for_timeout=4000)
             return f"generated_images/{filename}"
         except Exception as exc:
             print(f"Screenshot failed for {label}: {exc}")
@@ -74,7 +75,7 @@ def milestone_suffix(crossed_count: int) -> str:
 
 
 def maybe_send_ath_alert(
-    alerter: QuickBiteAlerter,
+    alerter: Alerter,
     df: pd.DataFrame,
     *,
     date_col: str,
@@ -99,7 +100,7 @@ def maybe_send_ath_alert(
 
     prior_max = float(prior[value_col].max())
     if latest_value <= prior_max:
-        print(f"{label}: latest {fmt(latest_value)} <= prior max {fmt(prior_max)}.")
+        #print(f"{label}: latest {fmt(latest_value)} <= prior max {fmt(prior_max)}.")
         return False
 
     if prior_max > 0:
@@ -108,17 +109,23 @@ def maybe_send_ath_alert(
         delta_text = "(first recorded high)"
 
     period_text = when_text(latest_row) if when_text else f"on {latest_date.date()}"
+    
+    if alerter.alerter_type == 'applications':
+        msg_link = f"[View on growthepie.com]({alerter.url}/{label})"
+    else:
+        msg_link = f"[View on growthepie.com]({alerter.url})"
+    
     message = (
         f"🥧 **{title}**\n"
         f"`{fmt(latest_value)}` {period_text} {delta_text}\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"{msg_link}"
     )
     alerter.send(message, label=label)
     return True
 
 
 def maybe_send_series_sum_milestone_alert(
-    alerter: QuickBiteAlerter,
+    alerter: Alerter,
     df: pd.DataFrame,
     *,
     date_col: str,
@@ -149,14 +156,14 @@ def maybe_send_series_sum_milestone_alert(
         f"🥧 **{title.format(m=fmt(milestone_value))}**{milestone_suffix(crossed_count)}\n"
         f"Cumulative total now `{fmt(current_total)}` "
         f"(was `{fmt(previous_total)}` before {latest_date.date()}'s `{fmt(latest_value)}`)\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label=label)
     return True
 
 
 def maybe_send_running_total_milestone_alert(
-    alerter: QuickBiteAlerter,
+    alerter: Alerter,
     df: pd.DataFrame,
     *,
     date_col: str,
@@ -186,14 +193,14 @@ def maybe_send_running_total_milestone_alert(
     message = (
         f"🥧 **{title.format(m=fmt(milestone_value))}**{milestone_suffix(crossed_count)}\n"
         f"Total now `{fmt(latest_value)}` (was `{fmt(previous_value)}` before {latest_date.date()})\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label=label)
     return True
 
 
 def run_totals_milestone_checks(
-    alerter: QuickBiteAlerter,
+    alerter: Alerter,
     today: dict,
     prior: dict,
     checks: list[tuple[str, float, str, Callable[[float], str], str]],
@@ -210,7 +217,7 @@ def run_totals_milestone_checks(
         message = (
             f"🥧 **{title.format(m=fmt(milestone_value))}**{milestone_suffix(crossed_count)}\n"
             f"Cumulative total now `{fmt(current_value)}` (was `{fmt(previous_value)}` as of yesterday)\n"
-            f"[View on growthepie.com]({alerter.qb_url})"
+            f"[View on growthepie.com]({alerter.url})"
         )
         alerter.send(message, label=label)
 
@@ -224,10 +231,166 @@ def load_fact_kpi_series(db_connector: DbConnector, origin_key: str, metric_key:
     )
 
 
+def _sql_string_list(values: list[str]) -> str:
+    return ", ".join("'" + value.replace("'", "''") + "'" for value in values)
+
+
+def load_app_metric_histories(
+    db_connector: DbConnector,
+    owner_projects: list[str],
+    metric_key: str,
+    origin_keys: list[str],
+) -> pd.DataFrame:
+    if not owner_projects or not origin_keys:
+        return pd.DataFrame(columns=["owner_project", "date", "value"])
+
+    owners_sql = _sql_string_list(owner_projects)
+    origin_keys_sql = _sql_string_list(origin_keys)
+
+    if metric_key == "daa":
+        daily_raw_sql = f"""
+            SELECT
+                oli.owner_project,
+                fact.date,
+                COALESCE(hll_cardinality(hll_union_agg(fact.hll_addresses))::numeric, 0) AS value
+            FROM public.fact_active_addresses_contract_hll fact
+            JOIN public.vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+            WHERE oli.owner_project IN ({owners_sql})
+              AND fact.origin_key IN ({origin_keys_sql})
+              AND fact.date < CURRENT_DATE
+            GROUP BY 1, 2
+        """
+    elif metric_key in {"txcount", "fees_paid_usd"}:
+        daily_raw_sql = f"""
+            SELECT
+                fact.owner_project,
+                fact.date,
+                SUM(fact.{metric_key})::numeric AS value
+            FROM public.vw_apps_contract_level_materialized fact
+            WHERE fact.owner_project IN ({owners_sql})
+              AND fact.origin_key IN ({origin_keys_sql})
+              AND fact.date < CURRENT_DATE
+            GROUP BY 1, 2
+        """
+    else:
+        raise ValueError(f"Unsupported app ATH metric: {metric_key}")
+
+    query = f"""
+        WITH daily_raw AS (
+            {daily_raw_sql}
+        ),
+        bounds AS (
+            SELECT
+                owner_project,
+                MIN(date) AS min_date
+            FROM daily_raw
+            GROUP BY 1
+        ),
+        calendar AS (
+            SELECT
+                b.owner_project,
+                gs::date AS date
+            FROM bounds b
+            CROSS JOIN LATERAL generate_series(
+                b.min_date,
+                CURRENT_DATE - INTERVAL '1 day',
+                '1 day'::interval
+            ) gs
+        )
+        SELECT
+            c.owner_project,
+            c.date,
+            COALESCE(r.value, 0) AS value
+        FROM calendar c
+        LEFT JOIN daily_raw r
+            ON r.owner_project = c.owner_project
+           AND r.date = c.date
+        ORDER BY 1, 2
+    """
+    df = db_connector.execute_query(query, load_df=True)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["owner_project", "date", "value"])
+
+    df["date"] = pd.to_datetime(df["date"])
+    df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
+    return df
+
+
+def run_app_ath_alerts():
+    from src.main_config import get_main_config
+
+    db_connector = DbConnector()
+    alerter = Alerter(
+        url="https://www.growthepie.com/applications/",
+        screenshot_prefix="app_ath",
+        alerter_type='applications'
+    )
+    app_metric_configs = {
+        "txcount": {"metric_name": "Transaction Count", "fmt": fmt_int},
+        "daa": {"metric_name": "Active Addresses", "fmt": fmt_int},
+        "fees_paid_usd": {"metric_name": "Gas Fees Paid", "fmt": fmt_usd},
+    }
+    min_30d_txcount = 10_000
+    min_history_days = 14
+
+    main_config = get_main_config()
+    app_origin_keys = [
+        chain.origin_key
+        for chain in main_config
+        if chain.api_in_apps and chain.api_deployment_flag == "PROD"
+    ]
+    if not app_origin_keys:
+        print("app_ath_alerts: no PROD app chains configured; skipping.")
+        return
+
+    apps_df = db_connector.get_active_projects(filtered_by_chains=app_origin_keys)
+    if apps_df is None or apps_df.empty:
+        print("app_ath_alerts: no active apps returned; skipping.")
+        return
+
+    apps_df = apps_df[apps_df["txcount"] >= min_30d_txcount].copy()
+    if apps_df.empty:
+        print(f"app_ath_alerts: no apps above {min_30d_txcount:,} tx in the last 30 days; skipping.")
+        return
+
+    apps_df["display_name"] = apps_df["display_name"].fillna(apps_df["name"])
+    owner_projects = apps_df["name"].tolist()
+    print(f"app_ath_alerts: checking {len(owner_projects)} apps across {len(app_origin_keys)} chains.")
+
+    for metric_key, metric_conf in app_metric_configs.items():
+        df_metric = load_app_metric_histories(db_connector, owner_projects, metric_key, app_origin_keys)
+        if df_metric.empty:
+            print(f"app_ath_alerts: no data returned for metric {metric_key}; skipping.")
+            continue
+
+        for app in apps_df.itertuples(index=False):
+            df_app = df_metric[df_metric["owner_project"] == app.name]
+            if df_app.empty:
+                print(f"app_ath_alerts: no {metric_key} history for {app.name}; skipping.")
+                continue
+
+            if df_app["date"].nunique() < min_history_days:
+                print(
+                    f"app_ath_alerts: {app.name} has only {df_app['date'].nunique()} "
+                    f"days of {metric_key} history; skipping."
+                )
+                continue
+
+            maybe_send_ath_alert(
+                alerter,
+                df_app,
+                date_col="date",
+                value_col="value",
+                label=f"{app.name}",
+                title=f"New daily ATH - {app.display_name} {metric_conf['metric_name']} across tracked chains",
+                fmt=metric_conf["fmt"],
+            )
+
+
 def run_pectra_type4_ath_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/pectra-upgrade",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/pectra-upgrade",
         screenshot_prefix="pectra_type4",
     )
     chains = ["ethereum", "optimism", "base", "unichain", "arbitrum"]
@@ -289,15 +452,15 @@ def run_pectra_type4_ath_alerts():
         "🥧 **New daily ATH - type-4 (EIP-7702) smart-wallet upgrade txs across all tracked chains**\n"
         f"`{fmt_int(latest_value)}` on {latest_day.date()} {delta_text}\n"
         f"Chains: {chain_names}\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label="combined")
 
 
 def run_arbitrum_timeboost_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/arbitrum-timeboost",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/arbitrum-timeboost",
         screenshot_prefix="timeboost",
     )
     days_back = (datetime.now(timezone.utc) - datetime(2025, 4, 10, tzinfo=timezone.utc)).days
@@ -338,8 +501,8 @@ def run_arbitrum_timeboost_alerts():
 
 def run_shopify_usdc_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/base-commerce",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/base-commerce",
         screenshot_prefix="shopify_usdc",
     )
     days_back = (datetime.now(timezone.utc) - datetime(2025, 6, 1, tzinfo=timezone.utc)).days
@@ -433,8 +596,8 @@ def run_shopify_usdc_alerts():
 
 def run_ethereum_scaling_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/ethereum-scaling",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/ethereum-scaling",
         screenshot_prefix="eth_scaling",
     )
     target_tps = 10_000
@@ -487,15 +650,15 @@ def run_ethereum_scaling_alerts():
         f"{milestone_suffix(crossed_count)}{month_note}\n"
         f"Now `{today_multiple:,.1f}x` (yesterday `{prior_multiple:,.1f}x`)\n"
         f"Latest monthly avg TPS `{today_tps:,.2f}` (prior view `{prior_tps:,.2f}`)\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label=f"mult_{threshold}x")
 
 
 def run_eip8004_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/eip8004",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/eip8004",
         screenshot_prefix="eip8004",
     )
 
@@ -596,15 +759,15 @@ def run_eip8004_alerts():
             f"{milestone_suffix(crossed_count)}\n"
             f"Total on {origin_key.title()} now `{fmt_int(current_value)}` "
             f"(was `{fmt_int(previous_value)}` as of yesterday)\n"
-            f"[View on growthepie.com]({alerter.qb_url})"
+            f"[View on growthepie.com]({alerter.url})"
         )
         alerter.send(message, label=f"chain_{origin_key}_10k")
 
 
 def run_fusaka_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/fusaka",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/fusaka",
         screenshot_prefix="fusaka",
     )
     dencun_block = 19_426_587
@@ -670,8 +833,8 @@ def run_fusaka_alerts():
 
 def run_linea_burn_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/linea-burn",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/linea-burn",
         screenshot_prefix="linea_burn",
     )
 
@@ -775,8 +938,8 @@ def run_linea_burn_alerts():
 
 def run_robinhood_alerts():
     db_connector = DbConnector()
-    alerter = QuickBiteAlerter(
-        qb_url="https://www.growthepie.com/quick-bites/robinhood-stock",
+    alerter = Alerter(
+        url="https://www.growthepie.com/quick-bites/robinhood-stock",
         screenshot_prefix="robinhood",
     )
 
@@ -884,6 +1047,6 @@ def run_robinhood_alerts():
         "🥧 **Robinhood Stocks - 7-day total market value change crossed above +20%**\n"
         f"Now `+{latest_pct:.2f}%` on {latest_day.date()} (yesterday `{prior_pct:+.2f}%`)\n"
         f"Total market value now `{fmt_usd(latest_value)}`\n"
-        f"[View on growthepie.com]({alerter.qb_url})"
+        f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label="pct7d_20")
