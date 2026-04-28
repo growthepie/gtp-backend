@@ -81,7 +81,7 @@ def main():
                 }
             }
             # fix NaN values in the data_dict
-            data_dict = fix_dict_nan(data_dict, f"attester_{row['attester']}")
+            data_dict = fix_dict_nan(data_dict, f"attester_{row['attester']}", send_notification=False)
             # Upload to S3 & invalidate
             upload_json_to_cf_s3(s3_bucket, f"v1/oli/analytics/attester/{row['attester']}", data_dict, cf_distribution_id, invalidate=False)
 

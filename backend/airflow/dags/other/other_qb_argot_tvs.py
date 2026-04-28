@@ -103,13 +103,16 @@ def run_dag():
         # we exclude the following, otherwise they would skew the TVL for certain dates (LOWERCASE!)
 
         EXCLUDED_ADDRESSES = {
-            '0x7cf9a80db3b29ee8efe3710aadb7b95270572d47',  # NIL
-            '0x090185f2135308bad17527004364ebcc2d37e5f6',  # Linea
-            '0x1789e0043623282d5dcc7f213d703c6d8bafbb04',  # SPELL
+            '0x7cf9a80db3b29ee8efe3710aadb7b95270572d47', # NIL
+            '0x090185f2135308bad17527004364ebcc2d37e5f6', # Linea
+            '0x1789e0043623282d5dcc7f213d703c6d8bafbb04', # SPELL
             '0x62b9c7356a2dc64a1969e19c23e4f579f9810aa7', # cvxCRV
             '0xa2085073878152ac3090ea13d1e41bd69e60dc99', # ELG
             '0xfb5c6815ca3ac72ce9f5006869ae67f18bf77006', # PSTAKE
-            '0xa0b73e1ff0b80914ab6fe0444e65848c4c34450b' # CRO
+            '0xa0b73e1ff0b80914ab6fe0444e65848c4c34450b', # CRO
+            '0x0ab87046fbb341d058f17cbc4c1133f25a20a52f', # gOHM
+            '0x0d292b4a8fcfed626dc73242cec1da0503b891fd', # TRN
+            '0x104f3152d8ebfc3f679392977356962ff36566ac', # PORTX
         }
 
 
@@ -180,19 +183,61 @@ def run_dag():
         df = ad.extract(load_params)
         print(f"Fetched {len(df)} rows from Dune query 6997383.")
 
-        df = df[['address', 'total_balance_usd', 'compiler', 'version', 'name', 'fully_qualified_name']]
-        df = df.replace('<nil>', None)
-        import re
-        def _extract_version(v):
-            if not isinstance(v, str):
-                return 'unknown'
-            m = re.search(r'\d+\.\d+\.\d+', v)
-            return m.group(0) if m else 'unknown'
-        df['version_short'] = df['version'].apply(_extract_version)
+        # dune returns two columns
+        df = df[['address', 'total_balance_usd']]
+
+        # left join sourcify data to df based on address
+        sourcify_data = db_connector.execute_query("""
+            WITH sourcify_attestations AS (
+                SELECT DISTINCT ON (chain_id, recipient)
+                    chain_id,
+                    recipient,
+                    tags_json->>'code_compiler' AS code_compiler,
+                    tags_json->>'code_language' AS code_language
+                FROM attestations
+                WHERE
+                    attester = decode('8DBAE854E53AEDFC3B8D78F7C1ADD53935939192', 'hex')
+                    AND revoked = false
+                    AND chain_id = 'eip155:1'
+                ORDER BY chain_id, recipient, time DESC
+            )
+            SELECT
+                a.recipient AS address,
+                a.code_language AS compiler,
+                a.code_compiler AS version,
+                substring(split_part(a.code_compiler, '-', 2) FROM '^\d+\.\d+') AS version_short
+            FROM sourcify_attestations a
+            INNER JOIN sys_main_conf mc ON a.chain_id = mc.caip2
+        """, load_df=True)
+        df = df.merge(sourcify_data, on='address', how='left')
 
         rows = []
 
         # --- compiler aggregation → sourcify_top1000_compiler_{compiler}_count/usd_total ---
+        df['compiler'] = df['compiler'].fillna('unknown')
+        df['compiler'] = df['compiler'].replace('solc', 'solidity')
+
+        # Dune fallback lookup for addresses not found in sourcify
+        unknown = df[df['compiler'] == 'unknown']['address'].to_list()
+        if unknown:
+            unknown_str = "|".join(unknown)
+            dune_lookup = ad.extract({
+                'queries': [
+                    {
+                        'name': 'argot-address-compiler-lookup',
+                        'query_id': 7357764,
+                        'params': {'addresses': unknown_str}
+                    }
+                ]
+            })
+            dune_found = dune_lookup[dune_lookup['compiler'] != '<nil>'][['address', 'compiler']]
+            if not dune_found.empty:
+                dune_map = dune_found.drop_duplicates(subset='address').set_index('address')['compiler']
+                df.loc[df['compiler'] == 'unknown', 'compiler'] = (
+                    df.loc[df['compiler'] == 'unknown', 'address'].map(dune_map).fillna('unknown')
+                )
+                print(f"Dune lookup resolved {len(dune_found)} previously unknown addresses.")
+
         df_compiler = df.groupby('compiler').agg(
             total_usd=('total_balance_usd', 'sum'),
             count=('total_balance_usd', 'count')
@@ -220,29 +265,22 @@ def run_dag():
         upserted = db_connector.upsert_table('fact_kpis', df_kpis)
         print(f"Upserted {upserted} rows into fact_kpis.")
 
-        # --- enrich df with owner_project ---
-        df_owner = db_connector.execute_query("""
+        # --- enrich df with owner_project & contract_name ---
+        gtp_labels = db_connector.execute_query("""
             SELECT
-                '0x' || encode(t.address, 'hex') AS address,
-                t.tag_value,
+                '0x' || encode(address, 'hex') AS address,
+                contract_name AS name,
+                owner_project,
                 d.display_name
-            FROM (
-                SELECT DISTINCT ON (address)
-                    address,
-                    tag_value
-                FROM public.vw_oli_label_pool_gold_v2
-                WHERE
-                    caip2 IN ('eip155:any', 'eip155:1')
-                    AND tag_id = 'owner_project'
-                ORDER BY address, confidence DESC
-            ) t
-            LEFT JOIN public.oli_oss_directory d ON d.name = t.tag_value
+            FROM public.vw_oli_label_pool_gold_pivoted_v2
+            LEFT JOIN public.oli_oss_directory d ON d.name = owner_project
+            WHERE caip2 = 'eip155:1'
         """, load_df=True)
-        df_owner = df_owner.rename(columns={'tag_value': 'owner_project'})
-        df = df.merge(df_owner, on='address', how='left')
+        gtp_labels = gtp_labels.rename(columns={'tag_value': 'owner_project'})
+        df = df.merge(gtp_labels, on='address', how='left')
 
         # --- table JSON upload ---
-        cols = ['address', 'total_balance_usd', 'compiler', 'version', 'name', 'fully_qualified_name', 'owner_project', 'display_name']
+        cols = ['address', 'total_balance_usd', 'compiler', 'version', 'name', 'owner_project', 'display_name']
         table_dict = {}
         table_dict["data"] = {
             "types": cols,
@@ -268,32 +306,32 @@ def run_dag():
 
         QUERY_TVS = """
             SELECT
-                substring(metric_key FROM 'cmp_solc_(\\d+\\.\\d+)\\.\\d+_usd') AS solc_major_version,
+                substring(metric_key FROM 'cmp_solidity_(\\d+\\.\\d+)_usd') AS solc_major_version,
                 "date",
                 SUM(value) AS value
             FROM public.fact_kpis
             WHERE
-                metric_key NOT IN ('cmp_solc_usd','cmp_vyper_usd','cmp_unverified_usd','cmp_solc_ct','cmp_vyper_ct','cmp_unverified_ct')
-                AND metric_key LIKE 'cmp_solc_%%'
+                metric_key NOT IN ('cmp_solidity_usd','cmp_vyper_usd','cmp_unknown_usd','cmp_solidity_ct','cmp_vyper_ct','cmp_unknown_ct')
+                AND metric_key LIKE 'cmp_solidity_%%'
                 AND metric_key LIKE '%%_usd'
                 AND origin_key = 'ethereum'
-                AND substring(metric_key FROM 'cmp_solc_(\\d+\\.\\d+)\\.\\d+_usd') IS NOT NULL
+                AND substring(metric_key FROM 'cmp_solidity_(\\d+\\.\\d+)_usd') IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 2 DESC
         """
 
         QUERY_CT = """
             SELECT
-                substring(metric_key FROM 'cmp_solc_(\\d+\\.\\d+)\\.\\d+_ct') AS solc_major_version,
+                substring(metric_key FROM 'cmp_solidity_(\\d+\\.\\d+)_ct') AS solc_major_version,
                 "date",
                 SUM(value) AS value
             FROM public.fact_kpis
             WHERE
-                metric_key NOT IN ('cmp_solc_usd','cmp_vyper_usd','cmp_unverified_usd','cmp_solc_ct','cmp_vyper_ct','cmp_unverified_ct')
-                AND metric_key LIKE 'cmp_solc_%%'
+                metric_key NOT IN ('cmp_solidity_usd','cmp_vyper_usd','cmp_unknown_usd','cmp_solidity_ct','cmp_vyper_ct','cmp_unknown_ct')
+                AND metric_key LIKE 'cmp_solidity_%%'
                 AND metric_key LIKE '%%_ct'
                 AND origin_key = 'ethereum'
-                AND substring(metric_key FROM 'cmp_solc_(\\d+\\.\\d+)\\.\\d+_ct') IS NOT NULL
+                AND substring(metric_key FROM 'cmp_solidity_(\\d+\\.\\d+)_ct') IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 2 DESC
         """
@@ -327,32 +365,32 @@ def run_dag():
 
         QUERY_TVS = """
             SELECT
-                substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)\\.\\d+_usd') AS vyper_major_version,
+                substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)_usd') AS vyper_major_version,
                 "date",
                 SUM(value) AS value
             FROM public.fact_kpis
             WHERE
-                metric_key NOT IN ('cmp_vyper_usd','cmp_unverified_usd','cmp_vyper_ct','cmp_unverified_ct')
+                metric_key NOT IN ('cmp_vyper_usd','cmp_unknown_usd','cmp_vyper_ct','cmp_unknown_ct')
                 AND metric_key LIKE 'cmp_vyper_%%'
                 AND metric_key LIKE '%%_usd'
                 AND origin_key = 'ethereum'
-                AND substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)\\.\\d+_usd') IS NOT NULL
+                AND substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)_usd') IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 2 DESC
         """
 
         QUERY_CT = """
             SELECT
-                substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)\\.\\d+_ct') AS vyper_major_version,
+                substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)_ct') AS vyper_major_version,
                 "date",
                 SUM(value) AS value
             FROM public.fact_kpis
             WHERE
-                metric_key NOT IN ('cmp_vyper_usd','cmp_unverified_usd','cmp_vyper_ct','cmp_unverified_ct')
+                metric_key NOT IN ('cmp_vyper_usd','cmp_unknown_usd','cmp_vyper_ct','cmp_unknown_ct')
                 AND metric_key LIKE 'cmp_vyper_%%'
                 AND metric_key LIKE '%%_ct'
                 AND origin_key = 'ethereum'
-                AND substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)\\.\\d+_ct') IS NOT NULL
+                AND substring(metric_key FROM 'cmp_vyper_(\\d+\\.\\d+)_ct') IS NOT NULL
             GROUP BY 1, 2
             ORDER BY 2 DESC
         """
@@ -376,7 +414,7 @@ def run_dag():
 
     @task()
     def create_compiler_jsons():
-        """Query fact_kpis for top-level compiler totals (solc/vyper/unverified) and upload JSONs to S3."""
+        """Query fact_kpis for top-level compiler totals (solc/vyper/unknown) and upload JSONs to S3."""
         import os
         import pandas as pd
         from src.db_connector import DbConnector
@@ -391,7 +429,7 @@ def run_dag():
                 value
             FROM public.fact_kpis
             WHERE
-                metric_key IN ('cmp_solc_ct','cmp_vyper_ct','cmp_unverified_ct')
+                metric_key IN ('cmp_solidity_ct','cmp_vyper_ct','cmp_unknown_ct')
                 AND origin_key = 'ethereum'
                 AND "date" >= '2018-01-01'
             ORDER BY 1 DESC
@@ -404,7 +442,7 @@ def run_dag():
                 value
             FROM public.fact_kpis
             WHERE
-                metric_key IN ('cmp_solc_usd','cmp_vyper_usd','cmp_unverified_usd')
+                metric_key IN ('cmp_solidity_usd','cmp_vyper_usd','cmp_unknown_usd')
                 AND origin_key = 'ethereum'
                 AND "date" >= '2018-01-01'
             ORDER BY 2 DESC

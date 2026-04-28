@@ -520,8 +520,6 @@ def run_dag():
         ### empty_cloudfront_cache
         from src.misc.helper_functions import empty_cloudfront_cache
         empty_cloudfront_cache(cf_distribution_id, '/v1/quick-bites/fusaka/*')
-
-
     # DAG TASK DEPENDENCIES
     backfill_data = backfill_blob_base_fee()
     create_jsons_task = create_jsons()

@@ -512,11 +512,11 @@ gtp_metrics_new = {
                 'toggles': ['absolute', 'stacked', 'percentage']
             }
             ,'gas_fees': {
-                'name': 'Fees Paid',
+                'name': 'Gas Fees Paid',
                 'icon': 'metrics-revenue',
                 'category': 'activity',
                 'fundamental': True,
-                'description': 'Gas fees paid by users interacting with the application contracts.',
+                'description': 'Gas fees (paid by users) towards the underlying chains in order to use the application.',
                 'metric_keys': ['fees_paid_usd', 'fees_paid_eth'],
                 'units': {
                     'usd': {'decimals': 2, 'decimals_tooltip': 2, 'agg_tooltip': False}, 

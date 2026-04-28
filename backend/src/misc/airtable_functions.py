@@ -264,7 +264,7 @@ def read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=True):
         df = df.drop(columns=['origin_key'])
 
     # convert address to bytes
-    df['address'] = df['address'].apply(lambda x: x.replace('0x', '\\x'))
-    df['attester'] = df['attester'].apply(lambda x: x.replace('0x', '\\x'))
+    df['address'] = df['address'].str.replace('0x', '\\x', regex=False)
+    df['attester'] = df['attester'].str.replace('0x', '\\x', regex=False)
 
     return df

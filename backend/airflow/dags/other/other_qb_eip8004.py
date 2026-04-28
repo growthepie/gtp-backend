@@ -601,7 +601,6 @@ def run_dag():
 
     get_eip8004_events_task = get_eip8004_events()
     create_jsons_for_quick_bite_task = create_jsons_for_quick_bite()
-
     get_eip8004_events_task >> create_jsons_for_quick_bite_task
-        
+
 run_dag()
