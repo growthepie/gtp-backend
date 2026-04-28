@@ -343,12 +343,14 @@ CREATE INDEX ON public.contract_label_review (owner_was_assigned)   WHERE owner_
 
 | Component | Status |
 |---|---|
-| `ai_classifier.py` — extend return dict with pre-computed signals | **TODO** — see `TODO(contract_label_features)` comment at line ~994 |
-| `automated_labeler.py` — write to `contract_label_features` after classification | **TODO** — see `TODO(contract_label_features)` comment at line ~895 |
-| `db_connector.py` — `upsert_contract_label_features()` | **TODO** — see `TODO(contract_label_features)` comment after `get_oli_labels()` |
-| `db_connector.py` — `insert_contract_label_review()` + `get_contract_label_features()` | **TODO** — same comment block |
-| `oli_airtable.py` `airtable_read_automated_labels()` — diff capture | **TODO** — see `TODO(contract_label_review)` comment at line ~564 |
-| `oli_airtable.py` `airtable_read_label_pool_reattest()` — diff capture | **TODO** — see `TODO(contract_label_review)` comment at line ~504 |
-| Airtable "Label Pool Automated" — add `gtp_owner_project` + `gtp_no_owner_project` fields | **TODO** — manual Airtable UI change |
-| Airtable "Label Pool Reattest" — add `gtp_no_owner_project` field | **TODO** — manual Airtable UI change |
-| Run table DDLs on DB | **TODO** — after code changes are deployed |
+| `ai_classifier.py` — extend return dict with pre-computed signals | **DONE** — main + fallback paths attach 22 signal keys |
+| `automated_labeler.py` — write to `contract_label_features` after classification | **DONE** — `_build_feature_row()` + `upsert_contract_label_features()` call before output write |
+| `db_connector.py` — `upsert_contract_label_features()` | **DONE** |
+| `db_connector.py` — `insert_contract_label_review()` + `get_contract_label_features()` | **DONE** |
+| `oli_airtable.py` `airtable_read_automated_labels()` — diff capture + human-override coalesce | **DONE** — review row written before `oli.submit_label`; human edits override AI tags |
+| `oli_airtable.py` `airtable_read_label_pool_reattest()` — diff capture | **NOT WIRED** (intentional) — diffs only flow from "Label Pool Automated" to keep validation surface concentrated |
+| `airtable_functions.read_all_label_pool_automated()` — new sibling of `read_all_label_pool_reattest()` | **DONE** — Label-Pool-Automated-only fn that coalesces `contract_name_human` + `new_usage_category` over AI, exposes `temp_owner_project` (review-only, never attested), drops `owner_project` when `gtp_no_owner_project=True`. Reattest reader left untouched. |
+| Validation surface consolidated to "Label Pool Automated" | **DONE** — `airtable_write_protocol_likely_to_automated()` re-targets the protocol-likely surfacer to Label Pool Automated; reviewer assigns owner/temp/no-owner there |
+| Airtable "Label Pool Automated" — `gtp_owner_project_confirmed` + `gtp_no_owner_project` fields | **DONE** — derived: `confirmed = (owner_project filled OR temp_owner_project filled)`. `gtp_no_owner_project` checkbox already exists |
+| Run table DDLs on DB | **TODO** — apply `backend/db_migrations/001_contract_label_features.sql` to prod once |
+| `google-genai==1.72.0` in `backend/requirements-new.txt` | **DONE** — restored after merge regression |

@@ -2158,32 +2158,71 @@ class DbConnector:
                 df = pd.read_sql(exec_string, self.engine.connect())
                 return df
 
-        # TODO(contract_label_features): add three new methods here for the approval workflow.
-        #
-        # 1. upsert_contract_label_features(rows: list[dict])
-        #    Bulk upsert into public.contract_label_features (ON CONFLICT (address, origin_key) DO UPDATE).
-        #    Array columns (novel_tokens, matched_routers, etc.) → PostgreSQL text[].
-        #    jsonb columns (bs_token_transfers, log_top_events) → json.dumps().
-        #    address → decode(addr_hex, 'hex').
-        #    Called by automated_labeler.py after classification, before OLI attestation.
-        #
-        # 2. insert_contract_label_review(rows: list[dict])
-        #    Append-only INSERT into public.contract_label_review (no ON CONFLICT — audit log).
-        #    Captures the diff between AI output (from contract_label_features) and GTP-attested values.
-        #    Called by oli_airtable.py in airtable_read_automated_labels() and
-        #    airtable_read_label_pool_reattest() immediately before oli.submit_label().
-        #    Columns: address, origin_key, labeled_at, reviewed_at, review_source,
-        #             ai_contract_name, ai_usage_category, ai_confidence, ai_owner_project_likely,
-        #             gtp_contract_name, gtp_usage_category, gtp_owner_project, gtp_no_owner_project,
-        #             name_was_changed, category_was_changed, owner_was_assigned.
-        #
-        # 3. get_contract_label_features(address_origin_pairs: list[tuple[str, str]]) -> dict
-        #    SELECT ai_contract_name, ai_usage_category, ai_confidence, ai_owner_project_likely, labeled_at
-        #    FROM public.contract_label_features
-        #    WHERE (address, origin_key) IN (...)
-        #    Returns dict keyed by (address, origin_key) for O(1) lookup in oli_airtable.py.
-        #
-        # DDL for both tables is in docs/contract_label_features_schema.md.
+        # ── contract_label_features / contract_label_review ──────────────────
+        # Schema: docs/contract_label_features_schema.md
+        # DDL:    backend/db_migrations/001_contract_label_features.sql
+
+        def upsert_contract_label_features(self, rows: list[dict]) -> int:
+                """Bulk-upsert AI feature rows. Idempotent on (address, origin_key)."""
+                if not rows:
+                        return 0
+                df = pd.DataFrame(rows)
+                # Address → bytea via the same \\x-prefix convention used elsewhere.
+                df['address'] = df['address'].astype(str).str.lower().str.replace('0x', '\\x', regex=False)
+                # jsonb cols: pangres serialises dict/list automatically; coerce None safely.
+                for jcol in ('bs_token_transfers', 'log_top_events'):
+                        if jcol in df.columns:
+                                df[jcol] = df[jcol].apply(lambda v: v if v is not None else None)
+                # Set composite PK so pangres knows what to ON CONFLICT against.
+                df = df.set_index(['address', 'origin_key'])
+                return self.upsert_table('public.contract_label_features', df, if_exists='update') or 0
+
+        def insert_contract_label_review(self, rows: list[dict]) -> int:
+                """Append-only insert. Generated diff-flag columns auto-populate."""
+                if not rows:
+                        return 0
+                insert_sql = text("""
+                    INSERT INTO public.contract_label_review (
+                        address, origin_key, labeled_at, reviewed_at, review_source,
+                        ai_contract_name, ai_usage_category, ai_confidence, ai_owner_project_likely,
+                        gtp_contract_name, gtp_usage_category, gtp_owner_project, gtp_no_owner_project
+                    ) VALUES (
+                        :address, :origin_key, :labeled_at, :reviewed_at, :review_source,
+                        :ai_contract_name, :ai_usage_category, :ai_confidence, :ai_owner_project_likely,
+                        :gtp_contract_name, :gtp_usage_category, :gtp_owner_project, :gtp_no_owner_project
+                    )
+                """)
+                normalised = []
+                for r in rows:
+                        n = dict(r)
+                        if isinstance(n.get('address'), str) and n['address'].startswith('0x'):
+                                n['address'] = n['address'].lower().replace('0x', '\\x')
+                        normalised.append(n)
+                with self.engine.begin() as conn:
+                        conn.execute(insert_sql, normalised)
+                return len(normalised)
+
+        def get_contract_label_features(self, address_origin_pairs: list[tuple]) -> dict:
+                """Lookup AI baseline for diff capture. Returns dict[(address_0x, origin_key)] -> row."""
+                if not address_origin_pairs:
+                        return {}
+                # Normalise lookup keys (always 0x-lower hex).
+                pairs = [(a.lower() if a.startswith('0x') else '0x' + a.lower().lstrip('\\x'), ok)
+                         for a, ok in address_origin_pairs]
+                hex_addrs = [a[2:] for a, _ in pairs]
+                origin_keys = [ok for _, ok in pairs]
+                sql = text("""
+                    SELECT '0x' || encode(address, 'hex') AS address, origin_key,
+                           labeled_at, ai_contract_name, ai_usage_category, ai_confidence,
+                           ai_owner_project_likely
+                    FROM public.contract_label_features
+                    WHERE (encode(address, 'hex'), origin_key) = ANY(
+                        SELECT unnest(CAST(:addrs AS text[])), unnest(CAST(:oks AS text[]))
+                    )
+                """)
+                with self.engine.begin() as conn:
+                        rows = conn.execute(sql, {'addrs': hex_addrs, 'oks': origin_keys}).mappings().all()
+                return {(r['address'], r['origin_key']): dict(r) for r in rows}
 
         ## TODO: filter by contracts only?
         def get_labels_lite_db(self, limit=50000, order_by='txcount', origin_keys=None):
