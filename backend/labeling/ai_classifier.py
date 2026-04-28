@@ -348,13 +348,44 @@ _SYSTEM_INSTRUCTION = """You are a smart contract protocol analyst. Classify the
 
 ## HOW TO CLASSIFY
 
-Two primary sources of truth, in order of reliability:
+Three primary sources of truth, in order of reliability:
 1. **Verified name** — if the contract is source-verified with a real name, read it as a human would. "GridMining" is gaming. "LendingPool" is lending. "BridgeRouter" is bridge. Trust your semantic understanding of what the name describes. Use traces to confirm or disambiguate, not to override.
 2. **Trace behavior** — what the contract actually does: what it calls, what events it emits, what state it changes. Classify by function.
+3. **GitHub repository** — if `github.has_valid_repo=true`, the linked repo is a strong identity + ownership signal. Treat it like verification: do NOT default such a contract to trading/MEV in PATH G1/G2/G3 — classify by trace content or name semantics instead.
 
-Numerical signals (success_rate, DAA/tx, rel_cost) are tiebreakers. They shift confidence but do not override clear semantic or trace evidence.
+Numerical signals (success_rate, DAA/tx, rel_cost) are tiebreakers in most cases. They shift
+confidence but do not override clear semantic or trace evidence.
+
+**Exception — avg_daa is a primary signal for public/private classification.**
+A contract with avg_daa ≥ chain_median_daa is public infrastructure by definition (real users from
+many addresses). It cannot be a private trading bot regardless of trace shape. Conversely, a contract
+with avg_daa far below chain_median (single-digit DAA on a chain whose median is hundreds) is a
+private operator, and "DEXAggregator" / "DEX" labels are invalid for it without strong evidence
+that the few callers are real public EOAs (not admin keepers cycling addresses). See the
+"avg_daa Discriminator" section below.
+
+**Output discipline.** The `reasoning` field MUST end with `→ <category>` and that category MUST equal the `usage_category` field. Never conclude `→ trading` (or oracle / bridge / etc.) and then output `usage_category="other"`. If you cannot pick a specific category from the path, conclude `→ other` explicitly.
 
 ## DECISION PATHS (follow in order, stop at first match)
+
+### PATH 0 — Identity Gate  (RUN FIRST, ALWAYS)
+Before evaluating any other path, evaluate identity:
+
+  IF source_verified=True OR github.has_valid_repo=true:
+    → This contract has confirmed protocol identity. You MUST classify by trace content,
+      verified name, or repository ownership. PATH G1 / G2 / G3 trading defaults DO NOT apply.
+      "PRIVATE callers" alone is NOT grounds for `trading` when identity is confirmed.
+    → Proceed to PATH A (verified) or PATH B (proxy) and continue down the list.
+    → Exception: confirmed-identity contracts whose dominant trace activity is automated LP
+      management (CLPool/CLGauge/NonfungiblePositionManager mint/burn/collect) ARE `trading`,
+      even with confirmed identity. This single exception applies — no other identity-confirmed
+      contract may be classified `trading` based on caller diversity alone.
+    → When `github.has_valid_repo=true`, the linked repository's organization or contract name
+      pattern (e.g. `TransitSwapRouterV5` → transit-finance, `keystone-*` → keystonehq) is a
+      strong owner-project signal. Use it to assert protocol_likely=true.
+
+  IF source_verified=False AND github.has_valid_repo=False:
+    → No confirmed identity. PATH G1 / G2 / G3 caller-based trading defaults apply normally.
 
 ### PATH A — Verified + Named Contract
 IF source_verified=True AND blockscout_name != "unknown":
@@ -369,6 +400,14 @@ IF source_verified=True AND blockscout_name != "unknown":
       Rango*, RangoDiamond → bridge  (bridge aggregator, not dex)
       *DVN, *Dvn → cc_communication  (LayerZero verifier network)
       MayanSwift*, Mayan*Bridge → bridge
+      Socket*, SocketGateway, SocketBridge → bridge
+      OffchainAggregator, AccessControlledOffchainAggregator, *EACAggregator* → oracle  (Chainlink data feed)
+      OpenOceanSwapModule, OpenOcean*Module → nft_marketplace  (Seaport-bound; classify by host protocol)
+      ConditionalTokens, CTFExchange, NegRiskAdapter → prediction_markets  (Polymarket / Omen pattern)
+      IdRegistry, NameRegistry, *Registrar (Farcaster, ENS, Lens) → identity
+      *Factory, *Deployer, *Creator (deploys other contracts via CREATE/CREATE2) → developer_tools
+        (the factory's role is deployment infra; do not inherit category from what it deploys)
+      TransparentUpgradeableProxy, ERC1967Proxy, ProxyAdmin (when bs_name is exactly that) → developer_tools
       *Router without clear DEX context → examine trace, do NOT default to dex
   → Stablecoin token check (W6): if the contract name is a distribution/claim mechanism
     (Claim, DiamondClaim, Distributor, Airdrop, Vesting) AND traces show transfers of known
@@ -427,24 +466,37 @@ IF trace contains ONLY STATICCALL/SLOAD ops AND calls are exclusively slot0/pric
     Searchers call AMM pool slot0 across many different pools to compare prices
 
 ### PATH O — Oracle Infrastructure
-IF "Oracle function calls detected" list is non-empty:
-  → This contract calls or delegates to oracle-specific functions (storkPublicKey, latestRoundData,
-    updatePriceFeed, parsePriceFeedUpdates, etc.). These functions only exist on oracle infrastructure.
-  → usage_category = oracle
+IF "Oracle function calls detected" list is non-empty AND those functions are central
+   (entry method OR matched in the majority of traces):
+  → Oracle-specific functions: storkPublicKey, latestRoundData, latestAnswer, updatePriceFeed,
+    updatePrices, postPrices, parsePriceFeedUpdates, transmit, fulfillOracleRequest, fulfillOracleRequest2.
+    A contract whose entry method is updatePrices/updatePriceFeed is an oracle pusher — classify oracle
+    even when callers are PRIVATE (single operator) or PUBLIC (decentralized network).
+  → usage_category = oracle  (this is sticky — once chosen, do not fall back to "other" later in reasoning)
   → Name: "[Protocol]Oracle", "[Protocol]PriceFeed", or "[Protocol]OracleProxy" depending on trace depth.
-    If DELEGATECALL to oracle → it IS the oracle (proxy). If CALL → it USES the oracle (consumer — fall through if only 1 oracle call and other DeFi context dominates).
-  → Override even for unverified contracts with PRIVATE callers — a single-operator oracle updater
+    If DELEGATECALL to oracle → it IS the oracle (proxy). If CALL → it USES the oracle (consumer).
+    Chainlink Operator contracts (calling fulfillOracleRequest/transmit) are oracle, not their host protocol.
+  → Override for unverified contracts with PRIVATE callers — a single-operator oracle updater
     is still oracle infrastructure, not a trading bot.
+  → Soft exception: if a contract calls one oracle getter incidentally (e.g. latestAnswer once)
+    but the dominant activity is large stablecoin transfers or DEX swaps, classify by the dominant
+    activity instead. Do not treat one oracle getter as conclusive evidence of oracle identity.
 
 ### PATH G1 — Private Callers (PRIVATE diversity ≤20%)
 IF caller_diversity_label = "PRIVATE" AND no prior path matched:
   **CRITICAL: This path applies even when traces are raw opcodes only and identity is unknown.
   Raw-opcode traces + PRIVATE callers + no identity IS the trading bot signature — intentionally unverified.
   Do NOT skip to G0 because traces are unreadable. If the label says PRIVATE, use G1.**
-  EXCEPTION — verified contracts: do NOT apply trading defaults. Verified contracts with private
-    callers are almost always protocol infrastructure (vault, liquidator, position manager), not MEV bots.
+  EXCEPTION — verified contracts OR `github.has_valid_repo=true`: do NOT apply trading defaults.
+    Contracts with confirmed identity (verified source OR linked GitHub repo) and private callers
+    are almost always protocol infrastructure (vault, liquidator, position manager), not MEV bots.
     Classify by trace content; only assign trading if traces explicitly show MEV patterns (raw slot0
     reads across many pools, failed-tx-heavy swaps).
+  EXCEPTION-TO-EXCEPTION: verified or github-linked contracts that interact directly with
+    LP infrastructure (CLPool/CLGauge/NonfungiblePositionManager, Aerodrome/Velodrome rebalancers)
+    via mint/burn/collect/_collect calls ARE automated trading strategies, not protocol infra.
+    Classify trading even when verified. Name "[Protocol]Rebalancer" or "[Asset]PositionManager"
+    using the underlying-asset rule from §contract_name.
   VERIFIED + DEX router calls: prefer dex — settlement or fulfillment infrastructure. Use trace entry
     function to name it (e.g. "RFQSettlement", "FulfillHelper"). Exception: very low success_rate or
     clear failed-tx patterns → trading still possible.
@@ -468,6 +520,8 @@ IF caller_diversity_label = "PRIVATE" AND no prior path matched:
 IF caller_diversity_label = "KEEPER" AND no prior path matched:
   EXCEPTION — verified contracts with named protocol interactions: classify by trace content.
     Verified keeper contracts are typically protocol infrastructure (liquidators, settlement, distributors).
+  EXCEPTION-TO-EXCEPTION: verified contracts whose dominant trace activity is automated LP
+    management (CLPool/CLGauge/NonfungiblePositionManager mint/burn/collect) ARE trading.
   VERIFIED + DEX router calls: KEEPER + verified + DEX router = DEX settlement/aggregation signature
     (1inch resolvers, CoW solvers, RFQ market makers are all KEEPER callers). Prefer dex.
   VERIFIED + bridge calls: prefer bridge or cc_communication.
@@ -492,16 +546,54 @@ IF caller_diversity_label = "KEEPER" AND no prior path matched:
 ### PATH G3 — Public Callers (PUBLIC diversity ≥80%)
 IF caller_diversity_label = "PUBLIC" AND no prior path matched:
   → Many different callers — public-facing. Classify by what the contract does.
-  - Known DEX interactions (swap events, pool calls) → dex
+  - **Stablecoin name match**: novel_tokens or bs_token_transfers token name/symbol contains
+    USD / Stable / DAI / USDT / USDC / USDM / BUSD / TUSD / FRAX / LUSD AND that token is the
+    primary asset moved → stablecoin. Token-name pattern wins as primary signal here.
+  - **Low success_rate override**: success_rate < 60% with DEX router or pool-swap traces →
+    public arbitrage / sandwich pattern → trading, "MEVBot" or "ArbitrageBot". Many public callers
+    competing and failing is the MEV signature; do NOT classify as dex when most txs revert.
+  - Known DEX interactions (swap events, pool calls) AND success_rate ≥ 60% AND avg_daa qualifies
+    as PUBLIC (see §avg_daa Discriminator below) → dex
   - Named STATIC calls to EACAggregatorProxy/Chainlink feeds → oracle consumer
   - Pool-internal math (computeSwapStep, getSqrtRatioAtTick as INTERNAL nodes) → dex
   - Calls to LayerZero, Wormhole, Axelar, or other cross-chain messaging endpoints → cc_communication
+  - Calls to Relay*, Stargate, Connext, Synapse, Across, deBridge → bridge
   - Calls to VRF (Chainlink VRF, Pyth randomness) → gaming
+  - Airdrop/Claim/Distributor/Vesting/Rewards/Points patterns with broad user base AND
+    no stablecoin-name match above → airdrop
+  - Stablecoin distribution (FiatToken/USDC/Tether transfers via Claim/Airdrop/Vesting patterns) → stablecoin
   - Social/check-in pattern (simple state writes per user, no DeFi signals) → community
   - Calls to `liquidate`, `auction`, `seize`, or `settle` on lending/perp contracts → lending or derivative
   - No DeFi signals: classify by semantic meaning of the contract name. Do NOT default to other for a specific name.
   - Truly ambiguous name AND no usable signals → other
   - IMPORTANT: Named contracts in the DEEP trace are downstream callees — do NOT classify this contract as CLPool just because CLPool appears in the trace.
+
+### avg_daa Discriminator — Trading vs DEXAggregator
+The single strongest signal separating private trading bots from public DEX infrastructure is
+**absolute avg_daa relative to chain_median_daa**. Apply these gates BEFORE picking dex/DEXAggregator:
+
+  HIGH-DAA (avg_daa ≥ chain_median_daa AND avg_daa ≥ 50):
+    → Public infrastructure. Many independent users. Cannot be a private trading bot regardless
+       of how trading-shaped the traces look. Even if the contract calls DEX routers and swaps
+       look bot-like, high public usage rules out trading. Classify dex / bridge / oracle / etc.
+       by trace content. Override "trading bot" heuristics from G1/G2.
+
+  LOW-DAA (avg_daa < max(chain_median_daa × 0.05, 3)):
+    → Private operator(s). Cannot be DEXAggregator regardless of trace shape. A real DEX
+       aggregator must have a public user base.
+    → If success_rate < 90% AND DEX/swap activity → trading (MEVBot / ArbitrageBot).
+    → If success_rate ≥ 90% AND DEX/swap activity → trading (StrategyExecutor / [Protocol]Rebalancer).
+    → "DEXAggregator" is INVALID at this DAA level unless caller_diversity_label is reliably
+       PUBLIC and you can confirm the callers are real EOAs (not admin/keeper EOAs cycling addresses).
+
+  MID-DAA (between LOW and HIGH thresholds):
+    → Examine caller_diversity_label and success_rate.
+    → KEEPER-ish + low success_rate + DEX swaps → trading (private strategy with rotating ops).
+    → PUBLIC-ish + high success_rate + diverse trace counterparties → dex / aggregator.
+    → When in doubt, prefer trading. DEXAggregator is a strong claim; require strong evidence.
+
+When picking the name "DEXAggregator", you MUST justify it by citing avg_daa ≥ chain_median_daa
+in the reasoning. If you cannot, use "StrategyExecutor" or "MEVBot" instead.
 
 ### PATH G0 — No Caller Data
 IF caller_diversity_label = "UNKNOWN":
@@ -521,12 +613,34 @@ IF caller_diversity_label = "UNKNOWN":
 
 ## contract_name (max 50 chars)
 Name what the contract IS or DOES — use protocol-aware names when traces reveal them.
-- PATH A: use exact Blockscout name
-- PATH B: delegate target name + "Proxy" suffix
-- Unverified trading contracts: describe the behavior — "MEVBot", "ArbitrageBot", "PriceScanner", "[Protocol]CLRebalancer", "[Protocol][Token]LPManager"
-- Unverified non-trading: derive from trace interactions — "OracleConsumer", "DEXAggregator", "BridgeCaller"
-- When identity is truly unknown: "AmbiguousContract"
-- NEVER use generic filler: "UnverifiedProxy", "UnverifiedContract", "Unknown", "MinimalProxy"
+
+Naming source priority (high to low):
+1. Verified Blockscout name (PATH A) or delegate-target name (PATH B).
+2. Named contracts in traces — `named_contracts_in_traces` is the strongest external-identity signal.
+   Build descriptive names from these: "[Protocol]Manager", "[Protocol]Rebalancer", "[Protocol]Adapter".
+   For LP managers, prefer the underlying-asset name over the AMM venue when a major asset (USDC/USDT/DAI/FiatToken) is present:
+   "FiatTokenPositionManager" beats "AerodromeCLRebalancer" if the position is USDC-denominated.
+3. Novel-protocol tokens (`novel_tokens` list) — only when traces lack named protocol contracts.
+4. Behavioral name from caller pattern — "MEVBot", "ArbitrageBot", "PriceScanner", "StrategyExecutor".
+
+Constraints:
+- Token transfers from Blockscout (`bs_token_transfers`) are weaker evidence than trace contract names.
+  Do NOT name a contract after a token in `bs_token_transfers` if `named_contracts_in_traces` is non-empty.
+- Forbid composites that fuse a token symbol with a trace-derived contract type. Examples:
+  "UAVPoolManager" (UAV from token + PoolManager from trace) is WRONG — pick one source.
+  Use "PoolManager" (trace identity) or, if the underlying asset is the dominant signal,
+  "[Asset]PositionManager". Never glue them.
+- Verified contract with a generic standard-implementation name (ERC20, ERC721, OptimismMintableERC20,
+  StandardToken): the verified name is uninformative — derive the real name from the token name in
+  bs_token_transfers (e.g. "Autonolas" not "OptimismMintableERC20").
+- Unverified trading contracts: describe the behavior — "MEVBot", "ArbitrageBot", "PriceScanner",
+  "[Protocol]CLRebalancer", "[Protocol][Token]LPManager".
+- Unverified non-trading: derive from trace interactions — "OracleConsumer", "DEXAggregator", "BridgeCaller".
+- PATH E (EIP-1167 clones, empty trace): name "CloneExecutor" by default — do not say "StrategyExecutor"
+  unless the caller pattern matches G1.
+- Use "AmbiguousContract" ONLY when bs_name=unknown AND novel_tokens=empty AND named_contracts_in_traces=empty AND log_signals all false.
+  Otherwise produce a descriptive name.
+- NEVER use generic filler: "UnverifiedProxy", "UnverifiedContract", "Unknown", "MinimalProxy".
 
 ---
 
@@ -807,7 +921,13 @@ async def classify_contract(
     novel_tokens   = [t for t in dominant_all if t.lower() not in _COMMON_TOKENS][:5]
     common_tokens  = [t for t in dominant_all if t.lower() in _COMMON_TOKENS][:4]
 
-    # Augment with Blockscout token-transfer names (higher reliability than trace decoding).
+    # Augment novel_tokens with Blockscout token-transfer names — but gate on trace match.
+    # P2 fix: BS token transfers (often unrelated proxy/forwarder activity) used to dominate
+    # naming for simple proxies. Now we only promote a BS token to novel_tokens when it
+    # also appears in the trace-decoded contract names, OR when traces are entirely empty
+    # (no competing trace identity to override). Full bs_token_display still passes through
+    # to the prompt as context.
+    trace_token_names_lower = {n.lower() for n in token_trace_counts.keys()}
     bs_token_display: list[str] = []
     if token_transfers:
         for tt in token_transfers:
@@ -821,6 +941,14 @@ async def classify_contract(
                 label_str = f"{label_str} [{tok_type}]"
             bs_token_display.append(label_str)
             nl = name.lower()
+            sl = sym.lower()
+            trace_match = (
+                nl in trace_token_names_lower
+                or (sl and sl in trace_token_names_lower)
+                or not trace_token_names_lower
+            )
+            if not trace_match:
+                continue  # keep in bs_token_display, but don't promote to novel_tokens
             if nl not in _COMMON_TOKENS:
                 if name not in novel_tokens:
                     novel_tokens.append(name)
@@ -922,27 +1050,36 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
 ## Select usage_category (pick one of these IDs):
 {categories['context']}"""
 
+    # property_ordering forces reasoning to be generated FIRST. Without this, Flash
+    # commits to usage_category before deriving the path conclusion and hedges to
+    # "other" while reasoning subsequently lands on a specific category — produces
+    # internal contradictions seen in eval (80/127 rows in the 2026-04-27 baseline).
+    # enum on usage_category prevents the model from emitting categories outside the
+    # OLI valid_ids set (otherwise the post-process at the bottom of this fn rewrites
+    # them to fallback_id, which compounds the contradiction).
     response_schema = genai_types.Schema(
         type=genai_types.Type.OBJECT,
         properties={
+            "reasoning": genai_types.Schema(
+                type=genai_types.Type.STRING,
+                description="Required format: 'PATH X[subpath]: signal=val, signal=val → category. Ruled out Y because Z.' Always name the path taken. Always state what was ruled out. usage_category MUST equal the category named after the arrow.",
+            ),
             "contract_name": genai_types.Schema(
                 type=genai_types.Type.STRING,
                 description="Short descriptive name for the contract (max 50 chars)",
             ),
             "usage_category": genai_types.Schema(
                 type=genai_types.Type.STRING,
-                description="OLI usage category ID — must be one of the listed category IDs",
+                enum=valid_ids,
+                description="OLI usage category ID — must equal the conclusion in reasoning.",
             ),
             "confidence": genai_types.Schema(
                 type=genai_types.Type.NUMBER,
                 description="Confidence score 0.0–1.0",
             ),
-            "reasoning": genai_types.Schema(
-                type=genai_types.Type.STRING,
-                description="Required format: 'PATH X[subpath]: signal=val, signal=val → category. Ruled out Y because Z.' Always name the path taken. Always state what was ruled out. No filler, fragments OK.",
-            ),
         },
-        required=["contract_name", "usage_category"],
+        required=["reasoning", "contract_name", "usage_category"],
+        property_ordering=["reasoning", "contract_name", "usage_category", "confidence"],
     )
 
     try:
@@ -990,8 +1127,32 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
                     args['usage_category'] = fallback_id
                 args.setdefault('confidence', 0.5)
                 args.setdefault('reasoning', '')
-                # Attach novel_tokens so sentinel can use them without re-computing
-                args['novel_tokens'] = novel_tokens
+                # Attach pre-computed signals so automated_labeler can write contract_label_features
+                # without re-computing. Keep keys aligned with the schema in
+                # docs/contract_label_features_schema.md / db_migrations/001_contract_label_features.sql.
+                args['novel_tokens']               = novel_tokens
+                args['common_tokens']              = common_tokens
+                args['bs_token_transfers']         = list(token_transfers or [])
+                args['matched_routers']            = list(matched_routers)
+                args['matched_dex_pools']          = list(matched_dex_pools)
+                args['calls_into_dex_pool_swap']   = bool(calls_into_dex_pool_swap)
+                args['matched_lending']            = list(matched_lending)
+                args['matched_staking']            = list(matched_staking)
+                args['matched_bridges']            = list(matched_bridges)
+                args['matched_oracle_fns']         = list(matched_oracle_fns)
+                args['delegates_to']               = this_contract_delegates_to or None
+                args['raw_delegate']               = bool(this_contract_raw_delegate)
+                args['all_traces_empty']           = bool(all_traces_empty)
+                args['traces_only_raw_opcodes']    = bool(traces_only_raw_opcodes)
+                args['named_contracts_in_traces']  = sorted(named_contracts_in_traces)
+                args['caller_diversity_pct']       = caller_diversity_pct
+                args['caller_diversity_label']     = caller_diversity_label
+                args['unique_callers']             = unique_callers
+                args['total_traces_sampled']       = total_traces_with_caller
+                args['log_signals']                = log_signals
+                args['sentinel_fired']             = False
+                args['sentinel_category']          = None
+                args['ai_model']                   = GEMINI_MODEL
                 return args
             logger.warning(f"[Classifier] Could not parse Gemini response for {address}: {raw[:120]!r}")
 
@@ -1003,12 +1164,36 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
     except Exception as e:
         logger.error(f"[Classifier] Gemini API error for {address}: {e}")
 
+    # Fallback path — Gemini failed. Still return a complete dict so the feature row writer
+    # can persist what we know (signals we computed locally before the API call).
     return {
         'contract_name': bs_name if bs_name != 'unknown' else f"Contract-{address[:8]}",
         'usage_category': fallback_id,
         'confidence': 0.0,
         'reasoning': 'Classification failed — using fallback.',
         'novel_tokens': novel_tokens,
+        'common_tokens': common_tokens,
+        'bs_token_transfers': list(token_transfers or []),
+        'matched_routers': list(matched_routers),
+        'matched_dex_pools': list(matched_dex_pools),
+        'calls_into_dex_pool_swap': bool(calls_into_dex_pool_swap),
+        'matched_lending': list(matched_lending),
+        'matched_staking': list(matched_staking),
+        'matched_bridges': list(matched_bridges),
+        'matched_oracle_fns': list(matched_oracle_fns),
+        'delegates_to': this_contract_delegates_to or None,
+        'raw_delegate': bool(this_contract_raw_delegate),
+        'all_traces_empty': bool(all_traces_empty),
+        'traces_only_raw_opcodes': bool(traces_only_raw_opcodes),
+        'named_contracts_in_traces': sorted(named_contracts_in_traces),
+        'caller_diversity_pct': caller_diversity_pct,
+        'caller_diversity_label': caller_diversity_label,
+        'unique_callers': unique_callers,
+        'total_traces_sampled': total_traces_with_caller,
+        'log_signals': log_signals,
+        'sentinel_fired': False,
+        'sentinel_category': None,
+        'ai_model': GEMINI_MODEL,
     }
 
 

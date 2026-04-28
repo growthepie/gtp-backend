@@ -665,6 +665,99 @@ def build_attestation_rows_v2(labeled_contracts: list[dict], valid_ids: list[str
     return rows
 
 
+def _build_feature_row(contract: dict) -> dict:
+    """Flatten enriched + labeled contract dict into a contract_label_features row.
+
+    Schema: docs/contract_label_features_schema.md
+    Required preconditions: classify_contract() has populated contract['label'] with the
+    extended return dict (the 22 pre-computed signal keys).
+    """
+    bs = contract.get('blockscout', {}) or {}
+    gh = contract.get('github', {}) or {}
+    m  = contract.get('metrics', {}) or {}
+    label = contract.get('label', {}) or {}
+    log_signals = label.get('log_signals', {}) or {}
+
+    txcount = m.get('txcount') or 0
+    avg_daa = m.get('avg_daa') or 0
+    daa_ratio = (avg_daa / txcount * 100) if txcount else 0
+
+    # ai_owner_project_likely: re-run sentinel so the feature store records the same flag
+    # the labeler would later attest as 'protocol-contract-likely'.
+    likely = _is_protocol_likely(label, bs, {**log_signals,
+                                              'has_valid_repo': gh.get('has_valid_repo', False)}, m)
+
+    impl_addr = bs.get('impl_address')
+    if isinstance(impl_addr, str) and impl_addr.startswith('0x'):
+        impl_addr_db = impl_addr.lower().replace('0x', '\\x')
+    else:
+        impl_addr_db = None
+
+    return {
+        # Identity
+        'address':            contract['address'],
+        'origin_key':         contract['origin_key'],
+        'labeled_at':         datetime.utcnow(),
+        'blockscout_name':    bs.get('contract_name'),
+        'is_verified':        bool(bs.get('is_verified', False)),
+        'is_proxy':           bool(bs.get('is_proxy', False)),
+        'impl_address':       impl_addr_db,
+        'impl_name':          bs.get('impl_name'),
+        'impl_verified':      bool(bs.get('impl_verified', False)),
+        'has_github_repo':    bool(gh.get('has_valid_repo', False)),
+        'github_repo_count':  int(gh.get('repo_count', 0)),
+        # Activity
+        'metric_day_range':   m.get('day_range'),
+        'txcount':            txcount,
+        'gas_eth':             m.get('gas_eth'),
+        'avg_daa':             avg_daa,
+        'avg_gas_per_tx':      m.get('avg_gas_per_tx'),
+        'rel_cost':            m.get('rel_cost'),
+        'success_rate':        m.get('success_rate'),
+        'daa_ratio':           daa_ratio,
+        # Caller diversity
+        'caller_diversity_pct':   label.get('caller_diversity_pct'),
+        'caller_diversity_label': label.get('caller_diversity_label'),
+        'unique_callers':         label.get('unique_callers'),
+        'total_traces_sampled':   label.get('total_traces_sampled'),
+        # Trace signals
+        'novel_tokens':              label.get('novel_tokens') or [],
+        'common_tokens':             label.get('common_tokens') or [],
+        'bs_token_transfers':        label.get('bs_token_transfers') or [],
+        'matched_routers':           label.get('matched_routers') or [],
+        'matched_dex_pools':         label.get('matched_dex_pools') or [],
+        'calls_into_dex_pool_swap':  bool(label.get('calls_into_dex_pool_swap', False)),
+        'matched_lending':           label.get('matched_lending') or [],
+        'matched_staking':           label.get('matched_staking') or [],
+        'matched_bridges':           label.get('matched_bridges') or [],
+        'matched_oracle_fns':        label.get('matched_oracle_fns') or [],
+        'delegates_to':              label.get('delegates_to'),
+        'raw_delegate':              bool(label.get('raw_delegate', False)),
+        'all_traces_empty':          bool(label.get('all_traces_empty', False)),
+        'traces_only_raw_opcodes':   bool(label.get('traces_only_raw_opcodes', False)),
+        'named_contracts_in_traces': label.get('named_contracts_in_traces') or [],
+        # Log signals
+        'log_has_access_control':  bool(log_signals.get('has_access_control', False)),
+        'log_has_token_transfers': bool(log_signals.get('has_token_transfers', False)),
+        'log_has_swaps':           bool(log_signals.get('has_swaps', False)),
+        'log_has_bridge_events':   bool(log_signals.get('has_bridge_events', False)),
+        'log_has_erc4337':         bool(log_signals.get('has_erc4337', False)),
+        'log_has_staking':         bool(log_signals.get('has_staking', False)),
+        'log_has_governance':      bool(log_signals.get('has_governance', False)),
+        'log_category_hints':      log_signals.get('category_hints') or [],
+        'log_top_events':          log_signals.get('summary'),
+        # AI output
+        'ai_contract_name':        label.get('contract_name'),
+        'ai_usage_category':       label.get('usage_category'),
+        'ai_confidence':           label.get('confidence'),
+        'ai_reasoning':            label.get('reasoning'),
+        'ai_model':                label.get('ai_model'),
+        'ai_owner_project_likely': bool(likely),
+        'sentinel_fired':          bool(label.get('sentinel_fired', False)),
+        'sentinel_category':       label.get('sentinel_category'),
+    }
+
+
 def write_output(rows: list[dict], output_dir: str, prefix: str = "labeled_contracts") -> tuple[str, str]:
     """Write JSON and CSV attestation files. Returns (json_path, csv_path)."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -772,6 +865,7 @@ def _write_attested_to_airtable(rows: list[dict]) -> None:
             '_comment', '_source', 'attester', 'is_protocol_contract_likely',
             'confidence', 'txcount', 'gas_eth', 'avg_daa', 'rel_cost',
             'github_found',
+            'day_range', 'avg_gas_per_tx', 'success_rate',
         }
         df = df.drop(columns=[c for c in df.columns if c not in AIRTABLE_COLS])
 
@@ -892,6 +986,19 @@ async def run_pipeline(args):
     else:
         rows = build_attestation_rows(final, valid_ids)
     json_path, csv_path = write_output(rows, args.output_dir)
+
+    # Persist every labeled contract to contract_label_features (incl. sub-threshold rows).
+    # Runs BEFORE Airtable / OLI flow so each run is captured regardless of whether the
+    # contract clears the confidence threshold for attestation.
+    if _HAS_DB:
+        try:
+            feature_rows = [_build_feature_row(c) for c in final if c.get('label')]
+            if feature_rows:
+                db = DbConnector()
+                n = db.upsert_contract_label_features(feature_rows)
+                logger.info(f"[contract_label_features] upserted {n} rows")
+        except Exception as e:
+            logger.error(f"[contract_label_features] write failed (non-fatal): {e}")
 
     # Summary
     by_category: dict[str, int] = {}

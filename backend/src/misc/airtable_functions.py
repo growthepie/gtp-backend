@@ -220,7 +220,7 @@ def read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=True):
     if df.empty:
         print('no contracts marked for reattesting.')
         return
-    
+
     if 'approve' not in df.columns and approved:
         print('no contracts marked for reattesting with approve column set to true.')
         return
@@ -236,7 +236,7 @@ def read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=True):
     # only keep rows where approve is set to true
     if approved:
         df = df[df['approve'] == True]
-    
+
     # drop not needded columns
     df = df[['address', 'origin_key', 'contract_name', 'owner_project', 'usage_category', 'attester', 'id']]
 
@@ -266,5 +266,110 @@ def read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=True):
     # convert address to bytes
     df['address'] = df['address'].str.replace('0x', '\\x', regex=False)
     df['attester'] = df['attester'].str.replace('0x', '\\x', regex=False)
+
+    return df
+
+
+# Read approved rows from "Label Pool Automated" with human-override coalesce + AI snapshot.
+# Kept SEPARATE from read_all_label_pool_reattest to keep concerns isolated:
+#   - reattest reader: classic single-table flow used by external attesters' submissions.
+#   - automated reader: this function, used only by airtable_read_automated_labels — applies
+#     the human-edit override (contract_name_human, new_usage_category) and exposes
+#     temp_owner_project + gtp_no_owner_project so the call site can write contract_label_review.
+def read_all_label_pool_automated(api, AIRTABLE_BASE_ID, table, approved=True):
+    """Read approved rows from "Label Pool Automated".
+
+    Behaviour distinct from read_all_label_pool_reattest:
+      - Coalesces human edits over AI fields:
+            contract_name  ← contract_name_human  if human set it
+            usage_category ← new_usage_category   if human set it
+      - Owner-project resolution:
+            linked `owner_project` recID → OSS slug — ATTESTED.
+            `temp_owner_project` (free text)        — preserved as separate column,
+                                                       review-only, NEVER attested on-chain.
+            `gtp_no_owner_project=True`             — drops `owner_project` from attestation.
+            Placeholder slug 'protocol-contract-likely' is dropped.
+      - Snapshots AI values BEFORE coalesce so the diff capture downstream sees both sides.
+      - Returns columns: address, chain_id, contract_name, owner_project, usage_category,
+        ai_contract_name, ai_usage_category, temp_owner_project, gtp_no_owner_project,
+        attester, id.
+    """
+    df = read_airtable(table)
+    if df.empty:
+        print('no contracts in Label Pool Automated.')
+        return
+    if 'approve' not in df.columns and approved:
+        print('no approved automated contracts.')
+        return
+
+    for col, default in [
+        ('contract_name', ''), ('owner_project', None), ('usage_category', None),
+        ('contract_name_human', ''), ('new_usage_category', None),
+        ('temp_owner_project', ''), ('gtp_no_owner_project', False),
+        ('attester', None),
+    ]:
+        if col not in df.columns:
+            df[col] = default
+
+    if approved:
+        df = df[df['approve'] == True]
+    if df.empty:
+        return df
+
+    # Snapshot AI baseline BEFORE coalesce — feeds the contract_label_review diff.
+    df['ai_contract_name'] = df['contract_name']
+    df['ai_usage_category'] = df['usage_category']
+
+    def _nonempty(v):
+        if isinstance(v, str):
+            return v.strip() != ''
+        if isinstance(v, list):
+            return len(v) > 0
+        return v is not None and not pd.isna(v)
+
+    df['contract_name'] = df.apply(
+        lambda r: r['contract_name_human'] if _nonempty(r.get('contract_name_human')) else r['contract_name'],
+        axis=1,
+    )
+    df['usage_category'] = df.apply(
+        lambda r: r['new_usage_category'] if _nonempty(r.get('new_usage_category')) else r['usage_category'],
+        axis=1,
+    )
+
+    keep = ['address', 'origin_key', 'contract_name', 'owner_project', 'usage_category',
+            'ai_contract_name', 'ai_usage_category', 'temp_owner_project',
+            'gtp_no_owner_project', 'attester', 'id']
+    df = df[[c for c in keep if c in df.columns]]
+
+    # Linked records arrive as 1-element lists; pull the recID.
+    for c in ['owner_project', 'usage_category', 'origin_key', 'ai_usage_category']:
+        if c in df.columns:
+            df[c] = df[c].apply(lambda x: x[0] if isinstance(x, list) and x else x)
+
+    # Resolve recIDs → slugs.
+    if df['owner_project'].notna().any():
+        df_owner_projects = read_airtable(api.table(AIRTABLE_BASE_ID, 'OSS Projects'))[['id', 'Name']].set_index('id')
+        df['owner_project'] = df['owner_project'].apply(
+            lambda x: df_owner_projects.loc[x]['Name'] if isinstance(x, str) and x.startswith('rec') and x in df_owner_projects.index else x)
+    if df['usage_category'].notna().any() or df['ai_usage_category'].notna().any():
+        df_cats = read_airtable(api.table(AIRTABLE_BASE_ID, 'Sub Categories'))[['id', 'category_id']].set_index('id')
+        for c in ['usage_category', 'ai_usage_category']:
+            df[c] = df[c].apply(
+                lambda x: df_cats.loc[x]['category_id'] if isinstance(x, str) and x.startswith('rec') and x in df_cats.index else x)
+    if df['origin_key'].notna().any():
+        df_chains = read_airtable(api.table(AIRTABLE_BASE_ID, 'Chains'))[['id', 'caip2']].set_index('id')
+        df['chain_id'] = df['origin_key'].apply(
+            lambda x: df_chains.loc[x]['caip2'] if isinstance(x, str) and x.startswith('rec') and x in df_chains.index else None)
+        df = df.drop(columns=['origin_key'])
+
+    # gtp_no_owner_project / placeholder-sentinel: drop owner_project when not attestable.
+    df['gtp_no_owner_project'] = df['gtp_no_owner_project'].fillna(False).astype(bool)
+    df.loc[df['gtp_no_owner_project'] | (df['owner_project'] == 'protocol-contract-likely'), 'owner_project'] = None
+    df['temp_owner_project'] = df['temp_owner_project'].apply(
+        lambda v: v.strip() if isinstance(v, str) and v.strip() else None)
+
+    df['address'] = df['address'].apply(lambda x: x.replace('0x', '\\x') if isinstance(x, str) else x)
+    if df['attester'].notna().any():
+        df['attester'] = df['attester'].apply(lambda x: x.replace('0x', '\\x') if isinstance(x, str) else x)
 
     return df
