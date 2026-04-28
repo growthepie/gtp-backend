@@ -145,7 +145,7 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'arbitrum-timeboost')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/arbitrum-timeboost', data_dict, cf_distribution_id)
-        
+
     @task()
     def run_shopify_usdc():
         import datetime
@@ -211,7 +211,7 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'shopify-usdc')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/shopify-usdc', data_dict, cf_distribution_id)
-        
+
     @task()
     def run_ethereum_scaling():
         ## TODO: have projection update? but not guaranteed that we'll hit 10k TPS in same timeframe...
@@ -325,7 +325,7 @@ def json_creation():
         data_dict = fix_dict_nan(data_dict, 'ethereum-scaling')
 
         upload_json_to_cf_s3(s3_bucket, f'v1/quick-bites/ethereum-scaling/data', data_dict, cf_distribution_id)
-    
+
     @task()
     def run_app_count():
         import datetime
@@ -570,7 +570,7 @@ def json_creation():
         df_dict = fix_dict_nan(df_dict, 'network graph')
         upload_json_to_cf_s3(s3_bucket, f'v1/misc/interop/data', df_dict, cf_distribution_id)
 
-    run_pectra_fork()    
+    run_pectra_fork()
     run_arbitrum_timeboost()
     run_shopify_usdc()
     run_ethereum_scaling()

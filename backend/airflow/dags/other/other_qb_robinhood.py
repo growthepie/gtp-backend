@@ -409,13 +409,13 @@ def run_dag():
     # Create task instances
     branch_task = decide_branch()
     pull_dune = pull_data_from_dune()
-    pull_yfinance = pull_data_from_yfinance() 
+    pull_yfinance = pull_data_from_yfinance()
     create_jsons = create_json_file()
     alert_system = notification_in_case_of_transfer()
 
     # Define execution order with branching
     branch_task >> [json_only_branch, full_pipeline_branch]
-    
+
     # Both branches lead to create_json_file
     json_only_branch >> create_jsons
     full_pipeline_branch >> pull_dune >> pull_yfinance >> alert_system >> create_jsons
