@@ -99,6 +99,10 @@ class AdapterTotalSupply(AbstractAdapter):
                     df['value'] = 21000000000
                     dfMain = pd.concat([dfMain,df])
                     continue
+                elif coin.origin_key == 'ronin':
+                    df['value'] = 1000000000
+                    dfMain = pd.concat([dfMain,df])
+                    continue
                 elif coin.origin_key == 'celo':
                     df['value'] = 1000000000
                     dfMain = pd.concat([dfMain,df])
