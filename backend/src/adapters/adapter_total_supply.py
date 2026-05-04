@@ -73,29 +73,8 @@ class AdapterTotalSupply(AbstractAdapter):
                 df = get_df_kpis_with_dates(days, end='today')
                 df['origin_key'] = coin.origin_key
                 df['metric_key'] = 'total_supply'
-                if coin.cs_deployment_origin_key == 'ethereum':
-                    block_df = self.db_connector.get_data_from_table(
-                        "fact_kpis",
-                        filters={
-                            "metric_key": "first_block_of_day",
-                            "origin_key": "ethereum"
-                        },
-                        days=days
-                    )
-
-                    if block_df.empty:
-                        raise ValueError("Missing block data in fact_kpis for Ethereum")
-
-                    block_df = block_df.reset_index()
-                    block_df['block_number'] = block_df['value'].astype(int)
-                    block_df = block_df[['date', 'block_number']]
-                    print(f"Fetched block data for Ethereum: {block_df.shape[0]} rows")
-                    
-                    # Merge with df
-                    df = df.merge(block_df, on='date', how='left')
-
-                    rpc = self.db_connector.get_special_use_rpc('ethereum')
-                elif coin.origin_key == 'zksync_era':
+                
+                if coin.origin_key == 'zksync_era':
                     df['value'] = 21000000000
                     dfMain = pd.concat([dfMain,df])
                     continue
@@ -108,10 +87,26 @@ class AdapterTotalSupply(AbstractAdapter):
                     dfMain = pd.concat([dfMain,df])
                     continue
                 else:
-                    df2 = self.db_connector.get_total_supply_blocks(coin.cs_deployment_origin_key, days)
-                    df2['date'] = pd.to_datetime(df2['date'])
-                    df = df.merge(df2, on='date', how='left')
-                    #print(df.to_markdown())
+                    block_df = self.db_connector.get_data_from_table(
+                        "fact_kpis",
+                        filters={
+                            "metric_key": "first_block_of_day",
+                            "origin_key": coin.origin_key
+                        },
+                        days=days
+                    )
+
+                    if block_df.empty:
+                        raise ValueError(f"Missing block data in fact_kpis for {coin.origin_key}. This is required to fetch total supply. Please run the utility_first_block DAG first to populate this data.")
+
+                    block_df = block_df.reset_index()
+                    block_df['block_number'] = block_df['value'].astype(int)
+                    block_df = block_df[['date', 'block_number']]
+                    print(f"Fetched block data: {block_df.shape[0]} rows")
+                    
+                    # Merge with df
+                    df = df.merge(block_df, on='date', how='left')
+
                     rpc = self.db_connector.get_special_use_rpc(coin.cs_deployment_origin_key)
 
                 # Defined a basic ABI for totalSupply and decimals

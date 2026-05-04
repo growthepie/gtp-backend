@@ -896,20 +896,6 @@ class DbConnector:
                         with connection.begin():
                                 connection.execute(text(exec_string))
                 print(f"HLL hashes on contract level for {chain} and {hours} hours loaded into fact_active_addresses_contract_hourly_hll.")
-               
-        
-        def get_total_supply_blocks(self, origin_key, days):
-                ## changed to Min instead of Max on July 29th, 2025 (to run it earlier in the day)
-                exec_string = f'''
-                        SELECT 
-                                block_date AS date,
-                                MIN(block_number) AS block_number
-                        FROM public.{origin_key}_tx
-                        WHERE block_date > (CURRENT_DATE - INTERVAL '{days+1} days')
-                        GROUP BY 1;
-                '''
-                df = pd.read_sql(exec_string, self.engine.connect())
-                return df
 
         ## Blockspace queries
         # This function is used to get aggregate the blockspace data on contract level for a specific chain. The data will be loaded into fact_contract_level table
