@@ -5,7 +5,7 @@ from src.misc.airflow_utils import alert_via_webhook
 
 @dag(
     default_args={
-        'owner': 'nader',
+        'owner': 'mseidl',
         'retries': 2,
         'retry_delay': timedelta(minutes=1),
         'email_on_failure': False,

@@ -4,11 +4,11 @@ from src.misc.airflow_utils import alert_via_webhook
 
 @dag(
     default_args={
-        'owner': 'lorenz',
+        'owner': 'mseidl',
         'retries': 2,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='lorenz')
+        'on_failure_callback': lambda context: alert_via_webhook(context, user='martin')
     },
     dag_id='backfill_economics',
     description='Backfill economics and da values for new entries or changes in gtp_dna economics mapping',

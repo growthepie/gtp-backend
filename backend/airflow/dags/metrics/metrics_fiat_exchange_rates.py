@@ -5,7 +5,7 @@ import os
 
 @dag(
     default_args={
-        'owner': 'nader',
+        'owner': 'mseidl',
         'retries': 3,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=10),

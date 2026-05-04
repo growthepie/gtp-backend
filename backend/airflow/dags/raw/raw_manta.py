@@ -4,11 +4,11 @@ from src.misc.airflow_utils import alert_via_webhook
 
 @dag(
     default_args={
-        'owner': 'nader',
+        'owner': 'mseidl',
         'retries': 2,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='nader')
+        'on_failure_callback': lambda context: alert_via_webhook(context, user='mseidl')
     },
     dag_id='raw_manta',
     description='Load raw tx data from Manta',

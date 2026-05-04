@@ -8,6 +8,7 @@ USER_IDS = {
     'nader': '326358477335298050',
     'mike': '253618927572221962',
     'ahoura': '874921624720257037',
+    'martin': '1139314584671490089',
 }
 
 def alert_via_webhook(context):

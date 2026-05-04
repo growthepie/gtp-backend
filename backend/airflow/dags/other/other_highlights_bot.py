@@ -7,11 +7,11 @@ CET = timezone("Europe/Paris")
 
 @dag(
     default_args={
-        'owner': 'nader',
+        'owner': 'mseidl',
         'retries': 2,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='nader')
+        'on_failure_callback': lambda context: alert_via_webhook(context, user='mseidl')
     },
     dag_id='other_highlights_bot',
     description='Send highlights from growthepie.com to Discord and Telegram',
