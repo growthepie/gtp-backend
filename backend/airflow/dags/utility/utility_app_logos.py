@@ -32,7 +32,7 @@ def etl():
         cf_bucket_name = os.getenv("S3_CF_BUCKET")
         github_token = os.getenv("GITHUB_TOKEN")
 
-        days = 3 # check if anything changed in the last d*24 hours
+        days = 7 # check if anything changed in the last d*24 hours
         repo_name = f"opensource-observer/oss-directory"
         file_path = "data/logos/"
         g = Github(github_token)
