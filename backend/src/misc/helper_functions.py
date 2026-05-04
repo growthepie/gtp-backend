@@ -791,9 +791,9 @@ def upload_image_to_cf_s3(bucket, s3_path, local_path, cf_distribution_id, file_
     :param cf_distribution_id: CloudFront distribution ID
     :param file_type: Image file type ('png', 'svg', 'jpg' or 'jpeg')
     """
-    valid_types = {'png': 'image/png', 'svg': 'image/svg+xml', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg'}
+    valid_types = {'png': 'image/png', 'svg': 'image/svg+xml', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp'}
     if file_type not in valid_types:
-        raise ValueError("Unsupported file type. Use 'png', 'svg', 'jpg' or 'jpeg'.")
+        raise ValueError("Unsupported file type. Use 'png', 'svg', 'jpg', 'jpeg' or 'webp'.")
 
     s3_key = f"{s3_path}.{file_type}"
     content_type = valid_types[file_type]
