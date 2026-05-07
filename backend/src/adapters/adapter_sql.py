@@ -168,6 +168,14 @@ class AdapterSQL(AbstractAdapter):
             days_end = load_params.get('days_end', None)
             self.run_active_addresses_agg(origin_keys, days, days_end)
             return None
+
+        elif self.load_type == 'active_addresses_agg_bq':
+            days_end = load_params.get('days_end', None)
+            batch_days = load_params.get('batch_days', 1)
+            bq_project = 'growthepie'
+            bq_dataset = 'gtp_archive'
+            self.run_active_addresses_contracts_bq(origin_keys, days, days_end, bq_project, bq_dataset, batch_days)
+            return None
         
         elif self.load_type == 'active_addresses_agg_hourly':
             hours_end = load_params.get('hours_end', None)
@@ -399,6 +407,30 @@ class AdapterSQL(AbstractAdapter):
         ## run aggregation for weekly active addresses (landing page chart) - this needs to be re-run completely whenever a new chain is added . TODO: re-run this for 1000d once a week (same for all cca_weekly_exclusives)
         print(f"...run cca_weekly_multiple l2s for last {days} days (can take a while for longer timeframes)...")
         self.db_connector.execute_jinja('chain_metrics/upsert_cca_weekly_multiple_l2s.sql.j2', {'days': days})
+
+    def run_active_addresses_contracts_bq(self, origin_keys, days, days_end=None, bq_project='growthepie', bq_dataset='gtp_archive', batch_days=1):
+        if origin_keys is None:
+            origin_keys = [chain.origin_key for chain in self.main_config if chain.runs_aggregate_apps == True]
+            print(f"...no specific origin_key found, aggregating BigQuery archived app addresses for all app chains: {origin_keys}...")
+
+        if days == 'auto':
+            days = 30
+        else:
+            days = int(days)
+
+        for origin_key in origin_keys:
+            if origin_key in [chain.origin_key for chain in self.main_config if chain.runs_aggregate_apps == True]:
+                print(f"...HLL: aggregating + inserting archived app addresses data from BigQuery for {origin_key} and last {days} days and days_end set to {days_end}...")
+                self.db_connector.aggregate_unique_addresses_contracts_hll_bigquery(
+                    origin_key,
+                    days,
+                    days_end,
+                    bq_project=bq_project,
+                    bq_dataset=bq_dataset,
+                    batch_days=batch_days,
+                )
+            else:
+                print(f"...HLL: no app addresses for {origin_key} to be aggregated from BigQuery...")
         
     def run_active_addresses_contracts_hourly(self, origin_keys, hours, hours_end=None):
         if origin_keys is None:

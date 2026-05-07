@@ -11,6 +11,8 @@ sys.path.append(f"/home/{sys_user}/gtp/backend/")
 from dotenv import load_dotenv
 load_dotenv() 
 import os
+import json
+import time
 
 db_user = os.getenv("DB_USERNAME")
 db_passwd = os.getenv("DB_PASSWORD")
@@ -845,6 +847,196 @@ class DbConnector:
                         with connection.begin():
                                 connection.execute(text(exec_string))
                 print(f"HLL hashes on contract level for {chain} and {days} days loaded into fact_active_addresses_contract_hll.")
+
+        def aggregate_unique_addresses_contracts_hll_bigquery(
+                self,
+                chain: str,
+                days: int,
+                days_end: int = None,
+                bq_project: str = "growthepie",
+                bq_dataset: str = "gtp_archive",
+                bq_table: str = None,
+                batch_days: int = 1,
+        ):
+                """
+                Backfill fact_active_addresses_contract_hll from archived raw tx data in BigQuery.
+
+                BigQuery HLL sketches are not binary-compatible with the Postgres hll extension,
+                so BigQuery only pre-deduplicates (contract, day, sender). Postgres then builds
+                the hll values with hll_hash_bytea/hll_add_agg.
+                """
+                from google.cloud import bigquery
+                from google.oauth2 import service_account
+                from psycopg2.extras import execute_values
+
+                if days_end is None:
+                        days_end = 0
+                if days_end > days:
+                        raise ValueError("days_end must be smaller than days")
+                if batch_days < 1:
+                        raise ValueError("batch_days must be at least 1")
+                if not chain.replace("_", "").isalnum():
+                        raise ValueError(f"Invalid chain identifier: {chain}")
+                if bq_table is None:
+                        bq_table = f"{chain}_tx"
+                if not bq_table.replace("_", "").isalnum():
+                        raise ValueError(f"Invalid BigQuery table identifier: {bq_table}")
+
+                credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+                if not credentials_json:
+                        raise ValueError("Missing GOOGLE_CREDENTIALS environment variable")
+                credentials_info = json.loads(credentials_json)
+                credentials = service_account.Credentials.from_service_account_info(credentials_info)
+                bq_client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+
+                start_date = (datetime.now() - timedelta(days=days)).date()
+                end_date = (datetime.now() - timedelta(days=days_end)).date()
+
+                def coerce_address(value):
+                        if value is None:
+                                return None
+                        if isinstance(value, bytes):
+                                return value
+                        if isinstance(value, bytearray):
+                                return bytes(value)
+                        if isinstance(value, memoryview):
+                                return value.tobytes()
+                        if isinstance(value, str):
+                                address = value.lower()
+                                if address.startswith("\\x") or address.startswith("0x"):
+                                        address = address[2:]
+                                return bytes.fromhex(address)
+                        raise TypeError(f"Unsupported address type from BigQuery: {type(value)}")
+
+                def format_seconds(seconds):
+                        return f"{seconds:.2f}s"
+
+                bq_sql = f"""
+                        SELECT
+                                to_address AS address,
+                                date,
+                                from_address
+                        FROM `{bq_project}.{bq_dataset}.{bq_table}`
+                        WHERE date >= @start_date
+                          AND date < @end_date
+                          AND to_address IS NOT NULL
+                          AND from_address IS NOT NULL
+                        GROUP BY 1,2,3
+                """
+
+                current_start = start_date
+                total_rows = 0
+                total_started_at = time.perf_counter()
+                while current_start < end_date:
+                        batch_started_at = time.perf_counter()
+                        current_end = min(current_start + timedelta(days=batch_days), end_date)
+                        job_config = bigquery.QueryJobConfig(
+                                query_parameters=[
+                                        bigquery.ScalarQueryParameter("start_date", "DATE", current_start.isoformat()),
+                                        bigquery.ScalarQueryParameter("end_date", "DATE", current_end.isoformat()),
+                                ]
+                        )
+                        print(f"...querying BigQuery {bq_project}.{bq_dataset}.{bq_table} for {chain}: {current_start} to {current_end}...")
+                        phase_started_at = time.perf_counter()
+                        query_job = bq_client.query(bq_sql, job_config=job_config)
+                        result = query_job.result()
+                        bq_wait_seconds = time.perf_counter() - phase_started_at
+
+                        phase_started_at = time.perf_counter()
+                        df = result.to_dataframe(create_bqstorage_client=False)
+                        bq_download_seconds = time.perf_counter() - phase_started_at
+                        bytes_processed = query_job.total_bytes_processed or 0
+                        print(
+                                f"...timing {chain} {current_start}->{current_end}: "
+                                f"bq_wait={format_seconds(bq_wait_seconds)}, "
+                                f"bq_download={format_seconds(bq_download_seconds)}, "
+                                f"bq_rows={len(df)}, "
+                                f"bq_bytes={bytes_processed / 1_000_000_000:.2f}GB"
+                        )
+
+                        if df.empty:
+                                print(f"...no BigQuery contract active address rows for {chain}: {current_start} to {current_end}.")
+                                current_start = current_end
+                                continue
+
+                        phase_started_at = time.perf_counter()
+                        df["address"] = df["address"].apply(coerce_address)
+                        df["from_address"] = df["from_address"].apply(coerce_address)
+                        df["date"] = df["date"].apply(pd.to_datetime).dt.date
+                        df = df.dropna(subset=["address", "from_address", "date"])
+                        convert_seconds = time.perf_counter() - phase_started_at
+
+                        phase_started_at = time.perf_counter()
+                        records = list(df[["address", "date", "from_address"]].itertuples(index=False, name=None))
+                        records_seconds = time.perf_counter() - phase_started_at
+
+                        create_seconds = 0
+                        insert_seconds = 0
+                        hll_seconds = 0
+
+                        raw_connection = self.engine.raw_connection()
+                        try:
+                                with raw_connection.cursor() as cursor:
+                                        phase_started_at = time.perf_counter()
+                                        cursor.execute("""
+                                                CREATE TEMP TABLE tmp_contract_hll_bq (
+                                                        address bytea NOT NULL,
+                                                        date date NOT NULL,
+                                                        from_address bytea NOT NULL
+                                                ) ON COMMIT DROP;
+                                        """)
+                                        create_seconds = time.perf_counter() - phase_started_at
+
+                                        phase_started_at = time.perf_counter()
+                                        if records:
+                                                execute_values(
+                                                        cursor,
+                                                        """
+                                                        INSERT INTO tmp_contract_hll_bq (address, date, from_address)
+                                                        VALUES %s
+                                                        """,
+                                                        records,
+                                                        page_size=10000,
+                                                )
+                                        insert_seconds = time.perf_counter() - phase_started_at
+
+                                        phase_started_at = time.perf_counter()
+                                        cursor.execute(f"""
+                                                INSERT INTO fact_active_addresses_contract_hll (address, origin_key, date, hll_addresses)
+                                                        SELECT
+                                                                address,
+                                                                '{chain}' AS origin_key,
+                                                                date,
+                                                                hll_add_agg(hll_hash_bytea(from_address), 17,5,-1,1)
+                                                        FROM tmp_contract_hll_bq
+                                                        GROUP BY 1,2,3
+                                                        HAVING COUNT(DISTINCT from_address) > 1
+                                                ON CONFLICT (address, origin_key, date)
+                                                DO UPDATE SET hll_addresses = EXCLUDED.hll_addresses;
+                                        """)
+                                        hll_seconds = time.perf_counter() - phase_started_at
+                                raw_connection.commit()
+                        except Exception:
+                                raw_connection.rollback()
+                                raise
+                        finally:
+                                raw_connection.close()
+
+                        total_rows += len(df)
+                        batch_seconds = time.perf_counter() - batch_started_at
+                        print(
+                                f"...timing {chain} {current_start}->{current_end}: "
+                                f"convert={format_seconds(convert_seconds)}, "
+                                f"records={format_seconds(records_seconds)}, "
+                                f"pg_create={format_seconds(create_seconds)}, "
+                                f"pg_insert={format_seconds(insert_seconds)}, "
+                                f"pg_hll_upsert={format_seconds(hll_seconds)}, "
+                                f"total={format_seconds(batch_seconds)}"
+                        )
+                        print(f"...loaded HLL batch for {chain}: {current_start} to {current_end}. BigQuery rows staged: {len(df)}.")
+                        current_start = current_end
+
+                print(f"HLL hashes on contract level for {chain} and {days} days loaded from BigQuery archive into fact_active_addresses_contract_hll. Total staged rows: {total_rows}. Total time: {format_seconds(time.perf_counter() - total_started_at)}.")
                
         def aggregate_unique_addresses_contracts_hll_hourly(self, chain:str, hours:int, hours_end:int=None):   
                 if hours_end is None:
