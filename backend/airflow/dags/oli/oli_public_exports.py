@@ -188,6 +188,16 @@ def build_cursor_predicate(config_key: str, cursor: Dict[str, str]) -> str:
 
 
 def save_to_gcs(df: pl.DataFrame, gcs_uri: str, fs: gcsfs.GCSFileSystem) -> None:
+    datetime_columns = [
+        name
+        for name, dtype in df.schema.items()
+        if dtype in (pl.Datetime, pl.Date)
+    ]
+    if datetime_columns:
+        df = df.with_columns(
+            pl.col(name).cast(pl.Datetime("us")) for name in datetime_columns
+        )
+
     with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
         df.write_parquet(tmp_file.name, compression="snappy")
         fs.put(tmp_file.name, gcs_uri)
