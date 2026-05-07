@@ -111,7 +111,7 @@ def get_google_credentials():
 
 
 def get_bq_client(credentials: service_account.Credentials) -> bigquery.Client:
-    project = os.getenv("OLI_PUBLIC_BQ_PROJECT", credentials.project_id)
+    project = "growthepie"
     location = "US"
     return bigquery.Client(credentials=credentials, project=project, location=location)
 
