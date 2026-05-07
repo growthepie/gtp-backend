@@ -78,6 +78,24 @@ def run_dag():
 
         run_robinhood_alerts()
 
+    @task
+    def chain_birthday_alerts():
+        from src.misc.custom_alerts import run_chain_birthday_alerts
+
+        run_chain_birthday_alerts()
+
+    @task
+    def app_birthday_alerts():
+        from src.misc.custom_alerts import run_app_birthday_alerts
+
+        run_app_birthday_alerts()
+
+    @task
+    def app_count_weekly_alert():
+        from src.misc.custom_alerts import run_app_count_weekly_alert
+
+        run_app_count_weekly_alert()
+
     app_ath_alerts()
     pectra_type4_alerts()
     arbitrum_timeboost_alerts()
@@ -87,6 +105,9 @@ def run_dag():
     fusaka_alerts()
     linea_burn_alerts()
     robinhood_alerts()
+    chain_birthday_alerts()
+    app_birthday_alerts()
+    app_count_weekly_alert()
 
 
 run_dag()

@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 import pandas as pd
@@ -316,6 +316,28 @@ def load_app_metric_histories(
     return df
 
 
+PROJECTS_FILTERED_JSON_URL = "https://api.growthepie.com/v1/labels/projects_filtered.json"
+
+
+def fetch_projects_filtered_df() -> pd.DataFrame:
+    import requests
+
+    response = requests.get(PROJECTS_FILTERED_JSON_URL, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+    types = payload.get("data", {}).get("types") or []
+    rows = payload.get("data", {}).get("data") or []
+    if not types or not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows, columns=types)
+    if "owner_project" in df.columns:
+        df = df.rename(columns={"owner_project": "name"})
+    if "txcount" in df.columns:
+        df["txcount"] = pd.to_numeric(df["txcount"], errors="coerce").fillna(0)
+    return df
+
+
 def run_app_ath_alerts():
     from src.main_config import get_main_config
 
@@ -343,7 +365,7 @@ def run_app_ath_alerts():
         print("app_ath_alerts: no PROD app chains configured; skipping.")
         return
 
-    apps_df = db_connector.get_active_projects(filtered_by_chains=app_origin_keys)
+    apps_df = fetch_projects_filtered_df()
     if apps_df is None or apps_df.empty:
         print("app_ath_alerts: no active apps returned; skipping.")
         return
@@ -513,8 +535,8 @@ def run_shopify_usdc_alerts():
         df_vol,
         date_col="date",
         value_col="value",
-        threshold=1_000_000,
-        label="usd_cum_1m",
+        threshold=5_000_000,
+        label="usd_cum_5m",
         title="Base Commerce - crossed `{m}` cumulative USDC volume settled milestone",
         fmt=fmt_usd,
     )
@@ -1059,3 +1081,246 @@ def run_robinhood_alerts():
         f"[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message, label="pct7d_20")
+
+
+def run_chain_birthday_alerts(window_days: int = 7, tuesday_only: bool = True):
+    from src.main_config import get_main_config
+
+    today = datetime.now(timezone.utc).date()
+    if tuesday_only and today.weekday() != 1:
+        print(f"chain_birthday_alerts: today is {today.strftime('%A')}; only runs on Tuesday.")
+        return
+
+    alerter = Alerter(
+        url="https://www.growthepie.com/chains",
+        screenshot_prefix="chain_birthday",
+    )
+
+    upcoming = []
+    main_config = get_main_config()
+    for chain in main_config:
+        if not (chain.api_in_main and chain.api_deployment_flag == "PROD"):
+            continue
+        if not chain.metadata_launch_date:
+            continue
+
+        try:
+            launch_date = datetime.strptime(chain.metadata_launch_date, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"chain_birthday_alerts: {chain.origin_key} has invalid launch_date {chain.metadata_launch_date}; skipping.")
+            continue
+
+        if launch_date > today:
+            continue
+
+        for offset in range(window_days):
+            candidate = today + timedelta(days=offset)
+            try:
+                anniversary = launch_date.replace(year=candidate.year)
+            except ValueError:
+                anniversary = launch_date.replace(year=candidate.year, day=28)
+
+            if anniversary != candidate:
+                continue
+
+            age_years = candidate.year - launch_date.year
+            if age_years < 1:
+                break
+
+            upcoming.append({
+                "date": candidate,
+                "origin_key": chain.origin_key,
+                "name": chain.name,
+                "age_years": age_years,
+                "launch_date": launch_date,
+            })
+            break
+
+    if not upcoming:
+        print(f"chain_birthday_alerts: no birthdays in next {window_days} days.")
+        return
+
+    upcoming.sort(key=lambda row: (row["date"], row["name"].lower()))
+    lines = [
+        f"`{row['date'].isoformat()}` (in {(row['date'] - today).days}d): "
+        f"**{row['name']}** turns {row['age_years']} "
+        f"(launched `{row['launch_date'].isoformat()}`)"
+        for row in upcoming
+    ]
+    message = (
+        f"🥧🎂 **Upcoming chain birthdays — next {window_days} days**\n"
+        + "\n".join(lines)
+        + f"\n[View on growthepie.com]({alerter.url})"
+    )
+    alerter.send(message)
+
+
+def run_app_birthday_alerts(window_days: int = 7, wednesday_only: bool = True):
+    from src.main_config import get_main_config
+
+    today = datetime.now(timezone.utc).date()
+    if wednesday_only and today.weekday() != 2:
+        print(f"app_birthday_alerts: today is {today.strftime('%A')}; only runs on Wednesday.")
+        return
+
+    db_connector = DbConnector()
+    alerter = Alerter(
+        url="https://www.growthepie.com/applications/",
+        screenshot_prefix="app_birthday",
+        alerter_type="applications",
+    )
+    min_30d_txcount = 10_000
+
+    main_config = get_main_config()
+    app_origin_keys = [
+        chain.origin_key
+        for chain in main_config
+        if chain.api_in_apps and chain.api_deployment_flag == "PROD"
+    ]
+    if not app_origin_keys:
+        print("app_birthday_alerts: no PROD app chains configured; skipping.")
+        return
+
+    apps_df = fetch_projects_filtered_df()
+    if apps_df is None or apps_df.empty:
+        print("app_birthday_alerts: no active apps returned; skipping.")
+        return
+
+    apps_df = apps_df[apps_df["txcount"] >= min_30d_txcount].copy()
+    if apps_df.empty:
+        print(f"app_birthday_alerts: no apps above {min_30d_txcount:,} tx in the last 30 days; skipping.")
+        return
+
+    apps_df["display_name"] = apps_df["display_name"].fillna(apps_df["name"])
+    owner_projects = apps_df["name"].tolist()
+
+    owners_sql = _sql_string_list(owner_projects)
+    origin_keys_sql = _sql_string_list(app_origin_keys)
+    query = f"""
+        SELECT
+            owner_project,
+            MIN(date)::date AS first_active_date
+        FROM public.vw_apps_contract_level_materialized
+        WHERE owner_project IN ({owners_sql})
+          AND origin_key IN ({origin_keys_sql})
+          AND txcount > 0
+        GROUP BY 1
+    """
+    df_first = db_connector.execute_query(query, load_df=True)
+    if df_first is None or df_first.empty:
+        print("app_birthday_alerts: no first-activity data returned; skipping.")
+        return
+
+    df_first["first_active_date"] = pd.to_datetime(df_first["first_active_date"]).dt.date
+    first_by_app = dict(zip(df_first["owner_project"], df_first["first_active_date"]))
+    display_by_app = dict(zip(apps_df["name"], apps_df["display_name"]))
+
+    upcoming = []
+    for owner_project, first_active_date in first_by_app.items():
+        if first_active_date is None or first_active_date >= today:
+            continue
+
+        for offset in range(window_days):
+            candidate = today + timedelta(days=offset)
+            try:
+                anniversary = first_active_date.replace(year=candidate.year)
+            except ValueError:
+                anniversary = first_active_date.replace(year=candidate.year, day=28)
+
+            if anniversary != candidate:
+                continue
+
+            age_years = candidate.year - first_active_date.year
+            if age_years < 1:
+                break
+
+            upcoming.append({
+                "date": candidate,
+                "owner_project": owner_project,
+                "display_name": display_by_app.get(owner_project, owner_project),
+                "age_years": age_years,
+                "first_active_date": first_active_date,
+            })
+            break
+
+    if not upcoming:
+        print(f"app_birthday_alerts: no birthdays in next {window_days} days.")
+        return
+
+    upcoming.sort(key=lambda row: (row["date"], row["display_name"].lower()))
+    lines = [
+        f"`{row['date'].isoformat()}` (in {(row['date'] - today).days}d): "
+        f"**{row['display_name']}** turns {row['age_years']} "
+        f"(first seen `{row['first_active_date'].isoformat()}`)"
+        for row in upcoming
+    ]
+    message = (
+        f"🥧🎂 **Upcoming app birthdays — next {window_days} days**\n"
+        + "\n".join(lines)
+        + f"\n[View on growthepie.com]({alerter.url})"
+    )
+    alerter.send(message)
+
+
+APPS_BY_CHAIN_JSON_URL = "https://api.growthepie.com/v1/landing-events/apps-data.json"
+
+
+def run_app_count_weekly_alert(monday_only: bool = True):
+    import requests
+
+    today = datetime.now(timezone.utc).date()
+    if monday_only and today.weekday() != 0:
+        print(f"app_count_weekly_alert: today is {today.strftime('%A')}; only runs on Monday.")
+        return
+
+    alerter = Alerter(
+        url="https://www.growthepie.com",
+        screenshot_prefix="app_count_weekly",
+    )
+
+    response = requests.get(APPS_BY_CHAIN_JSON_URL, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+
+    apps_by_chain = payload.get("data", {}).get("apps_by_chain") or {}
+    timeseries = apps_by_chain.get("timeseries") or {}
+    types = timeseries.get("types") or []
+    values = timeseries.get("values") or []
+    names = apps_by_chain.get("names") or []
+
+    if not types or not values or types[0] != "unix":
+        print("app_count_weekly_alert: unexpected JSON shape; skipping.")
+        return
+
+    column_keys = [t.removesuffix("_registered_count") for t in types[1:]]
+    display_names = [
+        name if name else key
+        for name, key in zip(names, column_keys)
+    ]
+
+    latest_row = max(values, key=lambda row: row[0])
+    week_unix = int(latest_row[0])
+    week_start = datetime.fromtimestamp(week_unix / 1000, tz=timezone.utc).date()
+
+    counts = [int(c) for c in latest_row[1:]]
+    paired = list(zip(display_names, column_keys, counts))
+
+    cross_chain = next(((name, count) for name, key, count in paired if key == "Cross-Chain"), None)
+    per_chain = sorted(
+        ((name, count) for name, key, count in paired if key != "Cross-Chain" and count > 0),
+        key=lambda row: row[1],
+        reverse=True,
+    )
+
+    chain_lines = "\n".join(f"{name}: {fmt_int(count)}" for name, count in per_chain)
+    cross_chain_line = (
+        f"Cross-Chain: {fmt_int(cross_chain[1])}\n" if cross_chain else ""
+    )
+
+    message = (
+        f"🥧 **Active apps per chain — week of {week_start.isoformat()}**\n"
+        f"{cross_chain_line}"
+        f"{chain_lines}\n"
+        f"[View on growthepie.com]({alerter.url})"
+    )
+    alerter.send(message)
