@@ -20,6 +20,7 @@ EXPORT_CONFIGS = {
     "attestations": {
         "destination_table": "attestations",
         "cursor_column": "last_updated_time",
+        "cursor_fields": ["last_updated_time", "id"],
         "merge_keys": ["id"],
         "cluster_fields": ["chain_id", "attester", "is_offchain"],
         "schema": [
@@ -57,13 +58,15 @@ EXPORT_CONFIGS = {
                 last_updated_time,
                 revocation_time
             FROM public.attestations
-            WHERE last_updated_time > '{cursor_value}'
+            WHERE {cursor_predicate}
             ORDER BY last_updated_time ASC, uid ASC
+            LIMIT {chunk_size}
         """,
     },
     "labels": {
         "destination_table": "labels",
         "cursor_column": "last_updated_time",
+        "cursor_fields": ["last_updated_time", "id", "tag_id"],
         "merge_keys": ["id", "tag_id"],
         "cluster_fields": ["chain_id", "tag_id", "attester"],
         "schema": [
@@ -89,8 +92,9 @@ EXPORT_CONFIGS = {
                 is_offchain,
                 last_updated_time
             FROM public.labels
-            WHERE last_updated_time > '{cursor_value}'
+            WHERE {cursor_predicate}
             ORDER BY last_updated_time ASC, uid ASC, tag_id ASC
+            LIMIT {chunk_size}
         """,
     },
 }
@@ -141,7 +145,11 @@ def ensure_table(client: bigquery.Client, table_id: str, config: Dict) -> None:
 
 
 def get_bq_cursor(client: bigquery.Client, table_id: str, cursor_column: str) -> str:
-    query = f"SELECT MAX({cursor_column}) AS cursor_value FROM `{table_id}`"
+    lookback_hours = int(os.getenv("OLI_PUBLIC_EXPORT_CURSOR_LOOKBACK_HOURS", "1"))
+    query = f"""
+        SELECT TIMESTAMP_SUB(MAX({cursor_column}), INTERVAL {lookback_hours} HOUR) AS cursor_value
+        FROM `{table_id}`
+    """
     try:
         result = client.query(query).result().to_dataframe()
     except Exception as exc:
@@ -151,6 +159,31 @@ def get_bq_cursor(client: bigquery.Client, table_id: str, cursor_column: str) ->
     if result.empty or result["cursor_value"].isnull().all():
         return "1970-01-01 00:00:00+00"
     return str(result["cursor_value"][0])
+
+
+def build_cursor_predicate(config_key: str, cursor: Dict[str, str]) -> str:
+    timestamp = cursor["last_updated_time"]
+    uid_hex = cursor.get("id", "").removeprefix("0x")
+    tag_id = cursor.get("tag_id", "").replace("'", "''")
+
+    if not uid_hex:
+        return f"last_updated_time > '{timestamp}'"
+
+    uid_after = f"uid > decode('{uid_hex}', 'hex')"
+    if config_key == "attestations":
+        tie_breaker = uid_after
+    elif tag_id:
+        tie_breaker = (
+            f"uid > decode('{uid_hex}', 'hex') "
+            f"OR (uid = decode('{uid_hex}', 'hex') AND tag_id > '{tag_id}')"
+        )
+    else:
+        tie_breaker = uid_after
+
+    return (
+        f"last_updated_time > '{timestamp}' "
+        f"OR (last_updated_time = '{timestamp}' AND ({tie_breaker}))"
+    )
 
 
 def save_to_gcs(df: pl.DataFrame, gcs_uri: str, fs: gcsfs.GCSFileSystem) -> None:
@@ -212,30 +245,57 @@ def export_table(config_key: str) -> int:
     ensure_table(bq_client, destination_table_id, config)
 
     cursor_value = get_bq_cursor(bq_client, destination_table_id, config["cursor_column"])
+    cursor = {"last_updated_time": cursor_value, "id": "", "tag_id": ""}
     logger.info("Exporting OLI %s rows after cursor %s", config_key, cursor_value)
 
     db_connector = DbConnector(db_name="oli")
-    query = config["query"].format(cursor_value=cursor_value)
-    df = pl.read_database_uri(query=query, uri=db_connector.uri)
-    if df.is_empty():
-        logger.info("No new OLI %s rows to export.", config_key)
-        return 0
-
     bucket = "gtp-data"
     prefix = "oli"
     export_date = datetime.utcnow().date().isoformat()
-    filename = f"part_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.parquet"
-    gcs_uri = (
-        f"gs://{bucket}/{prefix}/{config['destination_table']}/"
-        f"export_date={export_date}/{filename}"
-    )
-
+    chunk_size = int(os.getenv("OLI_PUBLIC_EXPORT_CHUNK_SIZE", "100000"))
     fs = gcsfs.GCSFileSystem(token=credentials_info)
-    save_to_gcs(df, gcs_uri, fs)
-    load_parquet_to_staging(bq_client, gcs_uri, staging_table_id, config)
-    merge_staging_to_destination(bq_client, staging_table_id, destination_table_id, config)
+    total_rows = 0
+    part_id = 0
+
+    while True:
+        cursor_predicate = build_cursor_predicate(config_key, cursor)
+        query = config["query"].format(
+            cursor_predicate=cursor_predicate,
+            chunk_size=chunk_size,
+        )
+        df = pl.read_database_uri(query=query, uri=db_connector.uri)
+        if df.is_empty():
+            logger.info("No more OLI %s rows to export.", config_key)
+            break
+
+        part_id += 1
+        filename = f"part_{part_id:06}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.parquet"
+        gcs_uri = (
+            f"gs://{bucket}/{prefix}/{config['destination_table']}/"
+            f"export_date={export_date}/{filename}"
+        )
+
+        save_to_gcs(df, gcs_uri, fs)
+        load_parquet_to_staging(bq_client, gcs_uri, staging_table_id, config)
+        merge_staging_to_destination(bq_client, staging_table_id, destination_table_id, config)
+
+        last_row = df.tail(1).to_dicts()[0]
+        cursor["last_updated_time"] = str(last_row["last_updated_time"])
+        cursor["id"] = last_row["id"]
+        cursor["tag_id"] = last_row.get("tag_id", "")
+        total_rows += df.height
+        logger.info(
+            "Exported %s %s rows through cursor %s.",
+            total_rows,
+            config_key,
+            cursor,
+        )
+
+        if df.height < chunk_size:
+            break
+
     bq_client.delete_table(staging_table_id, not_found_ok=True)
-    return df.height
+    return total_rows
 
 
 @dag(
@@ -254,11 +314,11 @@ def export_table(config_key: str) -> int:
     catchup=False,
 )
 def main():
-    @task(execution_timeout=timedelta(hours=1))
+    @task(execution_timeout=timedelta(hours=12))
     def export_attestations() -> int:
         return export_table("attestations")
 
-    @task(execution_timeout=timedelta(hours=1))
+    @task(execution_timeout=timedelta(hours=12))
     def export_labels() -> int:
         return export_table("labels")
 
