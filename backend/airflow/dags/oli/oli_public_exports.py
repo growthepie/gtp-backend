@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timedelta
 from typing import Dict
 
@@ -187,8 +188,9 @@ def build_cursor_predicate(config_key: str, cursor: Dict[str, str]) -> str:
 
 
 def save_to_gcs(df: pl.DataFrame, gcs_uri: str, fs: gcsfs.GCSFileSystem) -> None:
-    with fs.open(gcs_uri, "wb") as f:
-        df.write_parquet(f, compression="snappy")
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
+        df.write_parquet(tmp_file.name, compression="snappy")
+        fs.put(tmp_file.name, gcs_uri)
     logger.info("Saved %s rows to %s", df.height, gcs_uri)
 
 
@@ -249,7 +251,7 @@ def export_table(config_key: str) -> int:
     logger.info("Exporting OLI %s rows after cursor %s", config_key, cursor_value)
 
     db_connector = DbConnector(db_name="oli")
-    bucket = "gtp-data"
+    bucket = "gtp-public"
     prefix = "oli"
     export_date = datetime.utcnow().date().isoformat()
     chunk_size = int(os.getenv("OLI_PUBLIC_EXPORT_CHUNK_SIZE", "100000"))
