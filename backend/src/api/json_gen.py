@@ -782,6 +782,50 @@ class JsonGen():
 
         logging.info('DONE -- MegaETH Apps Export')
 
+    def create_contract_owner_project_mappings_json(self):
+        chain_list = [
+            chain.origin_key
+            for chain in self.main_config
+            if chain.api_in_apps
+        ]
+
+        if not chain_list:
+            logging.warning("No chains eligible for contract owner_project mappings export.")
+            return
+
+        query = f"""
+            SELECT
+                '0x' || encode(address, 'hex') AS address,
+                max(owner_project) AS owner_project
+            FROM public.vw_oli_label_pool_gold_pivoted_v2
+            WHERE owner_project IS NOT NULL
+                AND origin_key IN ({','.join([f"'{chain}'" for chain in chain_list])})
+            GROUP BY 1
+            ORDER BY address
+        """
+
+        df = self.db_connector.execute_query(query, load_df=True)
+        if df.empty:
+            logging.warning("No data returned for contract owner_project mappings export.")
+            return
+
+        data_dict = {
+            "data": {
+                "types": df.columns.to_list(),
+                "data": df.values.tolist()
+            },
+            "last_updated_utc": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        }
+        data_dict = fix_dict_nan(data_dict, 'apps/contract_mappings')
+
+        s3_path = f'{self.api_version}/apps/contract_mappings'
+        if self.s3_bucket:
+            upload_json_to_cf_s3(self.s3_bucket, s3_path, data_dict, self.cf_distribution_id, invalidate=False)
+        else:
+            self._save_to_json(data_dict, s3_path)
+
+        logging.info('DONE -- Contract Owner Project Mappings Export')
+
     def get_ecosystem_dict(self, origin_keys: List[str]) -> dict:
         top_apps = execute_jinja_query(self.db_connector, "api/select_top_apps.sql.j2", {"origin_keys": origin_keys, "days": 7, "limit": 5000}, return_df=True)
         if top_apps.empty: return {} # Handle empty case
