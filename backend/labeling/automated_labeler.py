@@ -745,7 +745,7 @@ def _build_feature_row(contract: dict) -> dict:
         'log_has_staking':         bool(log_signals.get('has_staking', False)),
         'log_has_governance':      bool(log_signals.get('has_governance', False)),
         'log_category_hints':      log_signals.get('category_hints') or [],
-        'log_top_events':          log_signals.get('summary'),
+        'log_top_events':          log_signals.get('event_counts') or {},
         # AI output
         'ai_contract_name':        label.get('contract_name'),
         'ai_usage_category':       label.get('usage_category'),
