@@ -722,20 +722,23 @@ async def classify_contract(
 
     # ── Log enriched data summary ────────────────────────────────────────────
     success_rate_str = f"{success_rate:.1%}" if success_rate is not None else "n/a"
+    # Compact trace summary: deduplicate entry functions + show unique contract names
+    _trace_entries = [t.get('entry_function', '?') for t in traces if t]
+    from collections import Counter as _Counter
+    _entry_counts = _Counter(_trace_entries)
+    _entry_str = ', '.join(f"{fn}×{n}" if n > 1 else fn for fn, n in _entry_counts.most_common(5))
+    _named = sorted({
+        c.get('contract_name', '')
+        for t in traces if t
+        for c in t.get('calls', [])
+        if c.get('contract_name') and not c['contract_name'].startswith('0x')
+    })
+    _named_str = ', '.join(_named[:8]) or 'none'
     logger.info(
-        f"\n{'='*60}\n"
-        f"[Input] {address} ({origin_key})\n"
-        f"  Blockscout : name={bs_name!r}  verified={is_verified}  proxy={is_proxy}\n"
-        f"  GitHub     : has_repo={has_repo}  url={repo_url or 'n/a'}\n"
-        f"  Metrics    : txcount={txcount:,}  avg_daa={avg_daa:.1f}  "
-        f"gas_eth={gas_eth:.6f}  rel_cost={rel_cost:.3f}x  "
-        f"avg_gas_per_tx={avg_gas_per_tx:.8f}  success_rate={success_rate_str}\n"
-        f"  Traces     : {len(traces)} traces\n"
-        + (
-            "\n".join(f"    {_format_trace_for_prompt(t, i)}" for i, t in enumerate(traces) if t)
-            if traces else "    (none)"
-        ) +
-        f"\n{'='*60}"
+        f"[Input] {address} ({origin_key}) | "
+        f"name={bs_name!r} verified={is_verified} github={has_repo} | "
+        f"tx={txcount:,} daa={avg_daa:.0f} sr={success_rate_str} | "
+        f"traces={len(traces)} [{_entry_str}] contracts=[{_named_str}]"
     )
 
     daa_ratio = (avg_daa / txcount * 100) if txcount else 0
@@ -1099,7 +1102,17 @@ Category hints from events: {', '.join(log_signals['category_hints']) or 'none'}
                 ),
             )
 
-        logger.info(f"[Prompt] {address}\n{'-'*60}\n{user_prompt}\n{'-'*60}")
+        # Log a compact signal summary instead of the full prompt (category list is static).
+        import re as _re
+        _sig_lines = []
+        for _line in user_prompt.splitlines():
+            # Keep only lines with signal values — skip headers, category definitions, empty lines
+            if _line.startswith('- ') and ':' in _line and '—' in _line:
+                continue  # category definition
+            if _line.startswith('##') or not _line.strip():
+                continue
+            _sig_lines.append(_line.strip())
+        logger.info(f"[Prompt signals] {address}\n  " + "\n  ".join(_sig_lines[:30]))
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _call_gemini)
