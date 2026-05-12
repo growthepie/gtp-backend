@@ -243,7 +243,7 @@ rpc_config = {
         "name": "Ronin",
         "processors": "evm_custom_gas",
         "stack": "basic",
-        "sleeper": 2,
+        "sleeper": 5,
         "calc_fees": True,
         "gas_token": {
             "symbol": "RON",
