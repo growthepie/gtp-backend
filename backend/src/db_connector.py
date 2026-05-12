@@ -2180,7 +2180,7 @@ class DbConnector:
                         if v is None:
                                 return None
                         if isinstance(v, list):
-                                escaped = ','.join('"' + str(x).replace('"', '\\"') + '"' for x in v)
+                                escaped = ','.join('"' + str(x).replace('\\', '\\\\').replace('"', '\\"') + '"' for x in v)
                                 return '{' + escaped + '}'
                         return v
                 for col in _TEXT_ARRAY_COLS:
