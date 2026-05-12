@@ -215,10 +215,15 @@ rpc_config = {
     
     "polygon_pos": {
         "name": "Polygon PoS",
-        "processors": "evm",
+        "processors": "evm_custom_gas",
         "stack": "basic",
         "sleeper": 4,
-        "calc_fees": False,
+        "calc_fees": True,
+        "gas_token": {
+            "symbol": "POL",
+            "coingecko_id": "polygon-ecosystem-token",
+            "decimals": 18,
+        },
     },
     
     # Custom Gas EVM chains
@@ -237,8 +242,14 @@ rpc_config = {
     "ronin": {
         "name": "Ronin",
         "processors": "evm_custom_gas",
+        "stack": "basic",
         "sleeper": 2,
-        "calc_fees": False,
+        "calc_fees": True,
+        "gas_token": {
+            "symbol": "RON",
+            "coingecko_id": "ronin",
+            "decimals": 18,
+        },
     },
 
     # Starknet Stack chains

@@ -30,8 +30,9 @@ GAS_NATIVE_TRANSFER = 21000  # Standard gas for a native ETH transfer
 GAS_ERC20_TRANSFER = 65000  # Standard gas for an ERC20 transfer
 GAS_SWAP = 350000  # Gas for a swap operation (e.g., Uniswap)
 
-ETH_PRICE_UPDATE_INTERVAL = 300  # 5 minutes in seconds
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+PRICE_UPDATE_INTERVAL = 1800  # 30 minutes in seconds
+COINGECKO_SIMPLE_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+ETH_COINGECKO_ID = "ethereum"
 
 # Redis constants
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -93,11 +94,20 @@ class EVMProcessor(BlockchainProcessor):
         """Fetch the latest block receipts and derive all info from them for EVM chains."""
         try:
             stack = rpc_config[chain_name].get("stack", None)
+            gas_token = rpc_config[chain_name].get("gas_token", {})
+            gas_token_coingecko_id = gas_token.get("coingecko_id", ETH_COINGECKO_ID)
+            gas_token_decimals = gas_token.get("decimals", 18)
+            is_custom_gas_token = gas_token_coingecko_id != ETH_COINGECKO_ID
+
             # Only fetch receipts if we need to calculate fees
             if calc_fees:
                 # Get all transaction receipts for the latest block
                 #logger.info(f"Fetching latest block receipts for {chain_name}")
-                receipts = await web3.eth.get_block_receipts('latest')
+                try:
+                    receipts = await web3.eth.get_block_receipts('latest')
+                except Exception as e:
+                    logger.warning(f"{chain_name}: block receipts unavailable, skipping tx cost calculation: {str(e)}")
+                    receipts = None
             else:
                 receipts = None
             
@@ -166,19 +176,19 @@ class EVMProcessor(BlockchainProcessor):
                         cost_wei = (gas_used * effective_gas_price) + l1_fee
                         tx_data = {
                             'gas_used': gas_used,
-                            'cost_wei': cost_wei
+                            'cost_raw': cost_wei
                         }
                     elif stack and stack in ["nitro"]:
                         cost_wei = (gas_used * effective_gas_price)
                         tx_data = {
                             'gas_used': gas_used,
-                            'cost_wei': cost_wei
+                            'cost_raw': cost_wei
                         }
                         
                     else:
                         tx_data = {
                             'gas_used': gas_used,
-                            'cost_wei': 0
+                            'cost_raw': 0
                         }
                     
                     # Categorize based on gas usage patterns
@@ -196,48 +206,63 @@ class EVMProcessor(BlockchainProcessor):
             # # Calculate average costs with fallbacks
             def calc_avg_cost(transfers):
                 if transfers:
-                    return sum(tx['cost_wei'] for tx in transfers) / len(transfers) / 1e18
+                    return sum(tx['cost_raw'] for tx in transfers) / len(transfers) / 10 ** gas_token_decimals
                 return 0
 
             # Calculate median cost
             def calculate_median_cost(transfers):
                 if not transfers:
                     return 0
-                costs = sorted(tx['cost_wei'] for tx in transfers)
+                costs = sorted(tx['cost_raw'] for tx in transfers)
                 if len(costs) % 2 == 1:
-                    return costs[len(costs) // 2] / 1e18
-                return (costs[len(costs) // 2 - 1] + costs[len(costs) // 2]) / 2 / 1e18
+                    return costs[len(costs) // 2] / 10 ** gas_token_decimals
+                return (costs[len(costs) // 2 - 1] + costs[len(costs) // 2]) / 2 / 10 ** gas_token_decimals
 
-            avg_cost_eth = calc_avg_cost(all_tx)
+            avg_cost_native = calc_avg_cost(all_tx)
             
-            avg_native_cost_eth = calculate_median_cost(native_transfers)
-            avg_erc20_cost_eth = calculate_median_cost(erc20_transfers)
-            avg_swap_cost_eth = calculate_median_cost(swaps)
+            avg_native_cost_native = calculate_median_cost(native_transfers)
+            avg_erc20_cost_native = calculate_median_cost(erc20_transfers)
+            avg_swap_cost_native = calculate_median_cost(swaps)
 
-            median_cost_eth = calculate_median_cost(all_tx)
+            median_cost_native = calculate_median_cost(all_tx)
 
-            total_costs_eth = sum(tx['cost_wei'] for tx in all_tx) / 1e18
-            cost_per_gas_eth = total_costs_eth / total_gas_used_sample if total_gas_used_sample > 0 else 0
+            total_costs_native = sum(tx['cost_raw'] for tx in all_tx) / 10 ** gas_token_decimals
+            cost_per_gas_native = total_costs_native / total_gas_used_sample if total_gas_used_sample > 0 else 0
             
             ## if one of the costs is 0, use the average cost of the others
-            if avg_native_cost_eth == 0 and cost_per_gas_eth > 0:
-                avg_native_cost_eth = cost_per_gas_eth * GAS_NATIVE_TRANSFER
+            if avg_native_cost_native == 0 and cost_per_gas_native > 0:
+                avg_native_cost_native = cost_per_gas_native * GAS_NATIVE_TRANSFER
                     
-            if avg_erc20_cost_eth == 0 and cost_per_gas_eth > 0:
-                avg_erc20_cost_eth = cost_per_gas_eth * GAS_ERC20_TRANSFER
+            if avg_erc20_cost_native == 0 and cost_per_gas_native > 0:
+                avg_erc20_cost_native = cost_per_gas_native * GAS_ERC20_TRANSFER
                     
-            if avg_swap_cost_eth == 0 and cost_per_gas_eth > 0:
-                avg_swap_cost_eth = cost_per_gas_eth * GAS_SWAP
+            if avg_swap_cost_native == 0 and cost_per_gas_native > 0:
+                avg_swap_cost_native = cost_per_gas_native * GAS_SWAP
 
-            # Get ETH price and calculate USD costs
+            # Get token prices and calculate USD + ETH-equivalent costs
             await self.backend.update_eth_price()
             eth_price = self.backend.eth_price_usd
+            gas_token_price = self.backend.token_prices_usd.get(gas_token_coingecko_id, 0 if is_custom_gas_token else eth_price)
 
-            avg_cost_usd = avg_cost_eth * eth_price if eth_price > 0 else 0
-            avg_native_cost_usd = avg_native_cost_eth * eth_price if eth_price > 0 else 0
-            avg_erc20_cost_usd = avg_erc20_cost_eth * eth_price if eth_price > 0 else 0
-            avg_swap_cost_usd = avg_swap_cost_eth * eth_price if eth_price > 0 else 0
-            median_cost_usd = median_cost_eth * eth_price if eth_price > 0 else 0
+            def native_to_eth_equivalent(value):
+                if gas_token_price > 0 and eth_price > 0:
+                    return value * gas_token_price / eth_price
+                return 0
+
+            def native_to_usd(value):
+                return value * gas_token_price if gas_token_price > 0 else 0
+
+            avg_cost_eth = native_to_eth_equivalent(avg_cost_native)
+            avg_native_cost_eth = native_to_eth_equivalent(avg_native_cost_native)
+            avg_erc20_cost_eth = native_to_eth_equivalent(avg_erc20_cost_native)
+            avg_swap_cost_eth = native_to_eth_equivalent(avg_swap_cost_native)
+            median_cost_eth = native_to_eth_equivalent(median_cost_native)
+
+            avg_cost_usd = native_to_usd(avg_cost_native)
+            avg_native_cost_usd = native_to_usd(avg_native_cost_native)
+            avg_erc20_cost_usd = native_to_usd(avg_erc20_cost_native)
+            avg_swap_cost_usd = native_to_usd(avg_swap_cost_native)
+            median_cost_usd = native_to_usd(median_cost_native)
 
             # Build block dictionary using receipt data and current timestamp
             block_dict = {
@@ -536,6 +561,17 @@ class RtBackend:
         self.eth_price_usd: float = 0.0
         self.last_eth_price_update: Optional[float] = None
         self.eth_price_lock = asyncio.Lock()
+        self.price_coingecko_ids = sorted({
+            ETH_COINGECKO_ID,
+            *[
+                config.get("gas_token", {}).get("coingecko_id")
+                for config in self.RPC_ENDPOINTS.values()
+                if config.get("gas_token", {}).get("coingecko_id")
+            ],
+        })
+        self.token_prices_usd: Dict[str, float] = {}
+        self.last_token_price_update: Dict[str, float] = {}
+        self.token_price_lock = asyncio.Lock()
         
         # Initialize HTTP session for API calls
         self.http_session: Optional[aiohttp.ClientSession] = None
@@ -685,31 +721,55 @@ class RtBackend:
 
     async def update_eth_price(self) -> None:
         """Update the ETH price from CoinGecko API."""
+        await self.update_token_prices(self.price_coingecko_ids)
+        self.eth_price_usd = self.token_prices_usd.get(ETH_COINGECKO_ID, self.eth_price_usd)
+        self.last_eth_price_update = self.last_token_price_update.get(ETH_COINGECKO_ID, self.last_eth_price_update)
+
+    async def update_token_price(self, coingecko_id: str) -> None:
+        """Update a single token price from CoinGecko API."""
+        await self.update_token_prices([coingecko_id])
+
+    async def update_token_prices(self, coingecko_ids: List[str]) -> None:
+        """Update token prices from CoinGecko API in one batched request."""
         current_time = time.time()
+        coingecko_ids = sorted({coingecko_id for coingecko_id in coingecko_ids if coingecko_id})
+        if not coingecko_ids:
+            return
         
-        async with self.eth_price_lock:
-            if (self.last_eth_price_update is None or 
-                current_time - self.last_eth_price_update >= ETH_PRICE_UPDATE_INTERVAL):
+        async with self.token_price_lock:
+            needs_update = any(
+                self.last_token_price_update.get(coingecko_id) is None or
+                current_time - self.last_token_price_update[coingecko_id] >= PRICE_UPDATE_INTERVAL
+                for coingecko_id in coingecko_ids
+            )
+            if needs_update:
                 
-                logger.info("Updating ETH price from CoinGecko API")
+                logger.info(f"Updating CoinGecko prices for: {', '.join(coingecko_ids)}")
+                for coingecko_id in coingecko_ids:
+                    self.last_token_price_update[coingecko_id] = current_time
                 
                 try:
                     if not self.http_session:
                         self.http_session = aiohttp.ClientSession()
-                        
-                    async with self.http_session.get(COINGECKO_API_URL) as response:
+
+                    params = {"ids": ",".join(coingecko_ids), "vs_currencies": "usd"}
+                    async with self.http_session.get(COINGECKO_SIMPLE_PRICE_URL, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
-                            if 'ethereum' in data and 'usd' in data['ethereum']:
-                                self.eth_price_usd = float(data['ethereum']['usd'])
-                                self.last_eth_price_update = current_time
-                                logger.info(f"Updated ETH price: ${self.eth_price_usd:.2f}")
-                            else:
-                                logger.error("Invalid response format from CoinGecko API")
+                            for coingecko_id in coingecko_ids:
+                                if coingecko_id in data and 'usd' in data[coingecko_id]:
+                                    price_usd = float(data[coingecko_id]['usd'])
+                                    self.token_prices_usd[coingecko_id] = price_usd
+                                    if coingecko_id == ETH_COINGECKO_ID:
+                                        self.eth_price_usd = price_usd
+                                        self.last_eth_price_update = current_time
+                                    logger.info(f"Updated {coingecko_id} price: ${price_usd:.6f}")
+                                else:
+                                    logger.error(f"Missing {coingecko_id} price in CoinGecko response")
                         else:
-                            logger.error(f"Failed to fetch ETH price: HTTP {response.status}")
+                            logger.error(f"Failed to fetch CoinGecko prices: HTTP {response.status}")
                 except Exception as e:
-                    logger.error(f"Error updating ETH price: {str(e)}")
+                    logger.error(f"Error updating CoinGecko prices: {str(e)}")
 
     async def publish_to_redis(self, chain_name: str, data: Dict[str, Any]) -> None:
         """Publish chain data to Redis stream."""
