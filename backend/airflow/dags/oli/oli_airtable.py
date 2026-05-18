@@ -547,8 +547,8 @@ def etl():
 
         # caip2 → origin_key inverse lookup (for contract_label_features primary key)
         from src.main_config import get_main_config
-        chain_id_to_origin_key = {f"eip155:{c.chain_id}": c.origin_key for c in get_main_config()
-                                  if getattr(c, 'chain_id', None)}
+        chain_id_to_origin_key = {c.caip2: c.origin_key for c in get_main_config()
+                                  if getattr(c, 'caip2', None)}
 
         for group in df_tags.groupby(['address', 'chain_id']):
             df_auto = group[1].copy()
