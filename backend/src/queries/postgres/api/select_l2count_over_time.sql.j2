@@ -6,7 +6,7 @@ WITH date_series AS (
     )::date AS date
 ),
 l2beat_origin_key AS (
-    SELECT l2.date_100k, l2.name, l2.archived_on, mc.origin_key
+    SELECT l2.date_100k, l2.name, l2.archived_on, l2.is_archived, mc.origin_key
     FROM sys_l2beat l2
     LEFT JOIN sys_main_conf mc ON l2.index = mc.aliases_l2beat 
 )
@@ -24,11 +24,12 @@ SELECT
 FROM date_series ds
 LEFT JOIN sys_l2beat s
     ON s.date_100k <= ds.date + interval '31 days'
-   AND (s.archived_on IS NULL OR s.archived_on > ds.date) -- active at ds.date
+   AND (COALESCE(s.is_archived, FALSE) = FALSE OR s.archived_on > ds.date) -- active at ds.date
 LEFT JOIN l2beat_origin_key s2
     ON date_trunc('month', s2.date_100k)::date = ds.date  -- launched this month
 LEFT JOIN l2beat_origin_key a2
-    ON a2.archived_on IS NOT NULL
+    ON COALESCE(a2.is_archived, FALSE) = TRUE
+   AND a2.archived_on IS NOT NULL
    AND date_trunc('month', a2.archived_on)::date = ds.date -- archived this month
 GROUP BY 1
 ORDER BY 1 ASC;
