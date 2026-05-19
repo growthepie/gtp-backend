@@ -32,7 +32,7 @@ def run_dag():
         octantv2 = OctantV2(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, api_version)
         #octantv2.run_load_octant_data_for_all_epochs()
         print('### LOAD DATA FOR LATEST EPOCH ###')
-        octantv2.run_load_epoch_data(11)
+        octantv2.run_load_epoch_data(12)
         
         print('### CREATE ALL OCTANT JSONS ###')
         octantv2.run_create_all_octant_jsons()
