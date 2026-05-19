@@ -2347,13 +2347,30 @@ class DbConnector:
                 df = pd.DataFrame(rows)
                 # Address → bytea via the same \\x-prefix convention used elsewhere.
                 df['address'] = df['address'].astype(str).str.lower().str.replace('0x', '\\x', regex=False)
+                # text[] cols: pangres infers JSON for Python lists — convert to pg array literals.
+                # PostgreSQL accepts '{"a","b"}' as a text[] value in parameterised queries.
+                _TEXT_ARRAY_COLS = (
+                        'novel_tokens', 'common_tokens', 'matched_routers', 'matched_dex_pools',
+                        'matched_lending', 'matched_staking', 'matched_bridges', 'matched_oracle_fns',
+                        'named_contracts_in_traces', 'log_category_hints',
+                )
+                def _to_pg_array(v):
+                        if v is None:
+                                return None
+                        if isinstance(v, list):
+                                escaped = ','.join('"' + str(x).replace('\\', '\\\\').replace('"', '\\"') + '"' for x in v)
+                                return '{' + escaped + '}'
+                        return v
+                for col in _TEXT_ARRAY_COLS:
+                        if col in df.columns:
+                                df[col] = df[col].apply(_to_pg_array)
                 # jsonb cols: pangres serialises dict/list automatically; coerce None safely.
                 for jcol in ('bs_token_transfers', 'log_top_events'):
                         if jcol in df.columns:
                                 df[jcol] = df[jcol].apply(lambda v: v if v is not None else None)
                 # Set composite PK so pangres knows what to ON CONFLICT against.
                 df = df.set_index(['address', 'origin_key'])
-                return self.upsert_table('public.contract_label_features', df, if_exists='update') or 0
+                return self.upsert_table('contract_label_features', df, if_exists='update') or 0
 
         def insert_contract_label_review(self, rows: list[dict]) -> int:
                 """Append-only insert. Generated diff-flag columns auto-populate."""

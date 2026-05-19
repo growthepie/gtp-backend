@@ -318,20 +318,26 @@ class AdapterL2Beat(AbstractAdapter):
         ## filter df_sys to is_archived = False
         df_sys = df_sys[df_sys['is_archived'] == False]
 
-        ## compare df_sys with df based on the 'index' column and show rows that are different
+        ## compare df_sys with df based on the 'index' column.
+        ## only projects that are missing from the latest API response ("right_only")
+        ## should be archived; "left_only" means newly added projects and must not be archived.
         df_merged = df.merge(df_sys, on='index', suffixes=('_new', '_sys'), how='outer', indicator=True)
-        df_different = df_merged[df_merged['_merge'] != 'both']
-        
-        if len(df_different) > 0:
-            df_different = df_different.reset_index(drop=True)
-            df_different = df_different[['index']]
+        df_archived = df_merged[df_merged['_merge'] == 'right_only']
+        df_new = df_merged[df_merged['_merge'] == 'left_only']
 
-            df_different['archived_on'] = date.today()
-            df_different['is_archived'] = True
+        if len(df_new) > 0:
+            print(f"...detected {len(df_new)} new project(s) in L2Beat summary (not archived): {df_new['index'].dropna().tolist()}")
+        
+        if len(df_archived) > 0:
+            df_archived = df_archived.reset_index(drop=True)
+            df_archived = df_archived[['index']]
+
+            df_archived['archived_on'] = date.today()
+            df_archived['is_archived'] = True
             
-            df_different.set_index(['index'], inplace=True)
-            self.db_connector.upsert_table('sys_l2beat', df_different)
-            send_discord_message(f"L2Beat: The following Layer 2 projects have been archived:\n{df_different.index.tolist()}", self.webhook)
+            df_archived.set_index(['index'], inplace=True)
+            self.db_connector.upsert_table('sys_l2beat', df_archived)
+            send_discord_message(f"L2Beat: The following Layer 2 projects have been archived:\n{df_archived.index.tolist()}", self.webhook)
         else:
             print("...no projects to archive in sys_l2beat")
         ####
