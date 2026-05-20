@@ -91,13 +91,13 @@ class AdapterTotalSupply(AbstractAdapter):
                         "fact_kpis",
                         filters={
                             "metric_key": "first_block_of_day",
-                            "origin_key": coin.origin_key
+                            "origin_key": coin.cs_deployment_origin_key
                         },
                         days=days
                     )
 
                     if block_df.empty:
-                        raise ValueError(f"Missing block data in fact_kpis for {coin.origin_key}. This is required to fetch total supply. Please run the utility_first_block DAG first to populate this data.")
+                        raise ValueError(f"Missing block data in fact_kpis for {coin.cs_deployment_origin_key}. This is required to fetch total supply. Please run the utility_first_block DAG first to populate this data.")
 
                     block_df = block_df.reset_index()
                     block_df['block_number'] = block_df['value'].astype(int)
