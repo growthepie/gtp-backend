@@ -556,8 +556,8 @@ def run_shopify_usdc_alerts():
         df_customers,
         date_col="date",
         value_col="value",
-        threshold=1_000,
-        label="customers_1k",
+        threshold=5_000,
+        label="customers_5k",
         title="Base Commerce - crossed `{m}` total unique customers milestone",
         fmt=fmt_int,
     )
