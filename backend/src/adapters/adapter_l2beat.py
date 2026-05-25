@@ -300,6 +300,18 @@ class AdapterL2Beat(AbstractAdapter):
         df['tvs_total'] = df['tvs'].apply(lambda x: x['breakdown']['total'] if isinstance(x, dict) and 'breakdown' in x and 'total' in x['breakdown'] else None)
         df['tvs_stables'] = df['tvs'].apply(lambda x: x['breakdown']['stablecoin'] if isinstance(x, dict) and 'breakdown' in x and 'stablecoin' in x['breakdown'] else None)
 
+        column_defaults = {
+            'hostChain': None,
+            'category': None,
+            'isArchived': False,
+            'isUpcoming': False,
+            'isUnderReview': False,
+            'stage': None,
+        }
+        for column, default in column_defaults.items():
+            if column not in df.columns:
+                df[column] = default
+
         ## keep only columns index, name, slug, type, hostChain, category, provider, isArchived, isUpcoming, isUnderReview, stage, VM, DA, Stack, Infra
         df = df[['index', 'name', 'slug', 'type', 'hostChain', 'category', 'provider', 'isArchived', 'isUpcoming', 'isUnderReview', 'stage', 'vm', 'da', 'stack', 'infra', 'tvs_total', 'tvs_stables']] 
 
