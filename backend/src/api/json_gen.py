@@ -21,6 +21,7 @@ from src.api.schemas import (
     UserInsightsResponse, UserInsightsData,
     TreeMapResponse
 )
+from src.api.seo_json import SeoJsonBuilder, atomic_write_json
 
 # --- Set up a proper logger ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -69,6 +70,10 @@ class JsonGen():
             # Pydantic dump cleans data, but we use allow_nan=False to force error or manual fix if needed.
             # Using custom fix_dict_nan before this call usually.
             json.dump(data, fp, ignore_nan=True)
+
+    def _save_to_json_atomic(self, data: Dict, path: str):
+        """Saves dictionary to JSON file via an atomic local move."""
+        atomic_write_json(path, data, lambda payload, fp: json.dump(payload, fp, ignore_nan=True))
     
     def _get_metric_source(self, metric_id: str, origin_key: str, level: str) -> List[str]:
         query_params = {"metric_id": metric_id, "origin_key": origin_key, "level": level}
@@ -988,6 +993,35 @@ class JsonGen():
 
         if self.s3_bucket and self.cf_distribution_id:
             empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/chains/*')
+
+    def create_seo_jsons(self):
+        logging.info("Generating SEO summary JSON artifacts...")
+        builder = SeoJsonBuilder(
+            db_connector=self.db_connector,
+            main_config=self.main_config,
+            api_version=self.api_version,
+            logger=logging.getLogger(__name__),
+            alert_func=send_discord_message,
+        )
+        payloads = builder.build_all()
+
+        for family, payload in payloads.items():
+            s3_path = f'{self.api_version}/seo/{family}'
+            if self.s3_bucket:
+                upload_json_to_cf_s3(
+                    self.s3_bucket,
+                    s3_path,
+                    payload,
+                    self.cf_distribution_id,
+                    invalidate=False,
+                    cache_control="public, max-age=300, s-maxage=86400, stale-while-revalidate=3600, stale-if-error=86400",
+                )
+            else:
+                self._save_to_json_atomic(payload, s3_path)
+            logging.info("SUCCESS: Exported SEO JSON %s", family)
+
+        if self.s3_bucket and self.cf_distribution_id:
+            empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/seo/*')
 
     def create_streaks_today_json(self):
         logging.info("Generating streaks_today JSON...")
