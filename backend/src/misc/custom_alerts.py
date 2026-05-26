@@ -966,62 +966,40 @@ def run_robinhood_alerts():
     )
 
     supply_query = """
-        WITH date_range AS (
+        WITH first_seen AS (
+            SELECT
+                rd.contract_address,
+                MIN(rd.date) AS first_seen_date
+            FROM public.robinhood_daily rd
+            INNER JOIN public.robinhood_stock_list rsl
+                ON rd.contract_address = rsl.contract_address
+            WHERE rsl.active = TRUE
+            GROUP BY rd.contract_address
+        ),
+        date_range AS (
             SELECT generate_series(
-                (SELECT MIN(date) FROM public.robinhood_daily),
+                (SELECT MIN(first_seen_date) FROM first_seen),
                 CURRENT_DATE - INTERVAL '1 day',
                 '1 day'::interval
             )::date AS date
-        ),
-        all_stocks AS (
-            SELECT contract_address
-            FROM public.robinhood_stock_list
-        ),
-        grid AS (
-            SELECT s.contract_address, d.date
-            FROM all_stocks s CROSS JOIN date_range d
-        ),
-        daily_metrics AS (
-            SELECT
-                contract_address,
-                date,
-                SUM(CASE WHEN metric_key = 'total_minted' THEN value ELSE 0 END) -
-                SUM(CASE WHEN metric_key = 'total_burned' THEN value ELSE 0 END) AS net_change
-            FROM public.robinhood_daily
-            WHERE metric_key IN ('total_minted', 'total_burned')
-            GROUP BY contract_address, date
-        ),
-        joined AS (
-            SELECT g.contract_address, g.date, COALESCE(dm.net_change, 0) AS net_change
-            FROM grid g
-            LEFT JOIN daily_metrics dm
-                ON g.contract_address = dm.contract_address AND g.date = dm.date
-        ),
-        cum AS (
-            SELECT
-                contract_address,
-                date,
-                SUM(net_change) OVER (
-                    PARTITION BY contract_address
-                    ORDER BY date
-                    ROWS UNBOUNDED PRECEDING
-                ) AS total_supply
-            FROM joined
         )
-        SELECT date, COUNT(*) FILTER (WHERE total_supply > 0) AS total_stocks_tokenized
-        FROM cum
-        GROUP BY date
-        ORDER BY date
+        SELECT
+            d.date,
+            COUNT(*) FILTER (WHERE fs.first_seen_date <= d.date) AS total_deployed_tokenized_assets
+        FROM date_range d
+        CROSS JOIN first_seen fs
+        GROUP BY d.date
+        ORDER BY d.date
     """
     df_supply = db_connector.execute_query(supply_query, load_df=True)
     maybe_send_running_total_milestone_alert(
         alerter,
         df_supply,
         date_col="date",
-        value_col="total_stocks_tokenized",
+        value_col="total_deployed_tokenized_assets",
         threshold=100,
-        label="supply_100",
-        title="Robinhood Stocks - crossed `{m}` total tokenized stocks milestone",
+        label="deployed_assets_100",
+        title="Robinhood Stocks - crossed `{m}` total deployed tokenized contracts/assets milestone",
         fmt=fmt_int,
     )
 
