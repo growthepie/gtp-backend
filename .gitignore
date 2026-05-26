@@ -58,3 +58,5 @@ backend/test_screenshots.py
 
 backend/src/adapters/*.txt
 claude_output.json
+
+handoff.md

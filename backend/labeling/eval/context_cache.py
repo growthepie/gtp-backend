@@ -46,9 +46,7 @@ from concurrent_contract_analyzer import (  # noqa: E402
 from automated_labeler import (  # noqa: E402
     enrich_contract,
     inject_chain_median_daa,
-    fetch_chain_median_daa,
     _load_chain_config,
-    ORIGIN_KEY_TO_CHAIN_ID,
 )
 
 logger = logging.getLogger("eval.cache")
@@ -121,10 +119,10 @@ def _fetch_db_metrics(address: str, origin_key: str, days: int = 7) -> Optional[
         return None
 
 
-def _seed_metrics_from_dump_row(row: dict, days: int = 7) -> dict:
-    """Fallback: build a plausible metrics dict from the validation-dump row when DB read fails."""
+def _seed_metrics_from_row(row: dict, days: int = 7) -> dict:
+    """Fallback: build a metrics dict from a DB row when the live DB fetch fails."""
     txcount = int(row.get("txcount") or 0)
-    gas_eth = 0.0  # not in dump
+    gas_eth = 0.0
     avg_daa = float(row.get("avg_daa") or 0)
     rel_cost = float(row.get("rel_cost") or 0)
     sr = row.get("success_rate")
@@ -181,7 +179,7 @@ async def build_or_load(
 
     # Cache miss — must run enrichment.
     metrics = _fetch_db_metrics(address, origin_key) or (
-        _seed_metrics_from_dump_row(dump_row) if dump_row else {}
+        _seed_metrics_from_row(dump_row) if dump_row else {}
     )
     contract = {"address": address, "origin_key": origin_key, "metrics": metrics}
 
@@ -254,22 +252,3 @@ async def warm_many(rows: list[dict], refresh: bool = False, concurrency: int = 
                 logger.error(f"warm failed for {r.get('address')}: {e}")
 
         await asyncio.gather(*(_one(r) for r in todo))
-
-
-# ── CLI ──────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import argparse
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dump", default=str(_BACKEND_DIR / "local/validation_dump_2026-04-25/all_109_combined.json"))
-    ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--concurrency", type=int, default=3)
-    args = ap.parse_args()
-
-    rows = json.loads(Path(args.dump).read_text())
-    if args.limit:
-        rows = rows[: args.limit]
-    asyncio.run(warm_many(rows, refresh=args.refresh, concurrency=args.concurrency))
