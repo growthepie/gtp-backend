@@ -1,5 +1,18 @@
 # gtp-backend — Claude Code conventions
 
+## Skills index
+
+Detailed reference guides live in `.claude/skills/`. Load them when debugging the relevant subsystem.
+
+| Skill | When to use |
+|-------|-------------|
+| `classifier-eval-loop.md` | Running or debugging the eval pipeline (critique/synthesize/verify/deploy) |
+| `automated-labeler-pipeline.md` | Contracts missing, skipped, not enriched, not attested |
+| `airtable-labeling-patterns.md` | Linked-record resolution, human override coalesce, dedup, sentinel handling |
+| `oli-attestation-flow.md` | OLI submission rules, owner_project handling, reattest loop |
+
+---
+
 ## General rule — check for existing mappings first
 
 Before adding any new constant, dict, lookup table, or mapping anywhere in the codebase:
@@ -81,7 +94,20 @@ All chain mappings live in `backend/src/main_config.py` (`get_main_config`, `get
 - Classifier: `backend/labeling/ai_classifier.py`, model `gemini-2.5-flash`, temp 0.1.
 - Response schema **must** include `property_ordering=["reasoning","contract_name","usage_category","confidence"]`. Without this Flash generates `usage_category` before `reasoning` and hedges to "other".
 - All signal keys from `classify_contract()` return dict feed into `contract_label_features` — do not remove keys from the return dict without updating `_build_feature_row()` in `automated_labeler.py`.
-- Eval loop: `backend/labeling/eval/eval_human_corrections.py` — run against human-corrected rows before and after prompt changes to measure improvement.
+- `_is_protocol_likely()` in `automated_labeler.py` computes `ai_owner_project_likely` post-classification. `dex` is intentionally excluded from the fast-pass category list — unverified dex contracts are often private strategies. `novel_tokens` check runs after trading/other exclusion, not before.
+- Eval loop: `backend/labeling/eval/` — 4-phase pipeline (critique → synthesize → verify → deploy). See `.claude/skills/classifier-eval-loop.md` for full reference.
+
+## Prompt versioning
+
+- Live `_SYSTEM_INSTRUCTION` is tracked in `backend/labeling/prompts/current.md`.
+- Every deployed version is archived as `backend/labeling/prompts/vN.md` with accuracy metadata in `versions.json`.
+- Deploy via `--mode deploy` in the eval orchestrator — never edit `_SYSTEM_INSTRUCTION` directly without updating `current.md` and `versions.json`.
+- To roll back: copy `vN.md` into `_SYSTEM_INSTRUCTION` in `ai_classifier.py` and update `versions.json` manually.
+
+## Chain median DAA caching
+
+- `fetch_chain_median_daa()` in `automated_labeler.py` uses a module-level `_chain_median_cache` dict.
+- One DB connection per chain per process, not per contract. Do not call `DbConnector()` inside per-contract loops — use this cache pattern.
 
 ## Automated labeler — pipeline & debugging map
 

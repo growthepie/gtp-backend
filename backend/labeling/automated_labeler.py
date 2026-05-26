@@ -228,14 +228,22 @@ def fetch_unlabeled_contracts(
     return records
 
 
+_chain_median_cache: dict[str, float] = {}
+
+
 def fetch_chain_median_daa(origin_keys: list[str], days: int = 7) -> dict[str, float]:
     """Query the DB for median avg_daa of top contracts (>=0.1% of chain txcount) per chain.
 
     Returns a dict mapping origin_key -> median_daa. Falls back to empty dict on error.
+    Results are cached in-process so repeated calls for the same chain skip the DB round-trip.
     """
+    uncached = [k for k in origin_keys if k not in _chain_median_cache]
+    if not uncached:
+        return {k: _chain_median_cache[k] for k in origin_keys if k in _chain_median_cache}
+
     try:
         db = DbConnector()
-        keys_str = "','".join(origin_keys)
+        keys_str = "','".join(uncached)
         sql = f"""
             WITH chain_totals AS (
                 SELECT origin_key, SUM(txcount) AS total_txcount
@@ -264,12 +272,17 @@ def fetch_chain_median_daa(origin_keys: list[str], days: int = 7) -> dict[str, f
         """
         import pandas as pd
         df = pd.read_sql(sql, db.engine)
-        result = dict(zip(df['origin_key'], df['median_daa'].astype(float)))
-        logger.info(f"Chain median DAA: { {k: f'{v:.1f}' for k, v in result.items()} }")
-        return result
+        fetched = dict(zip(df['origin_key'], df['median_daa'].astype(float)))
+        _chain_median_cache.update(fetched)
+        cached_hits = [k for k in origin_keys if k not in uncached]
+        logger.info(
+            f"Chain median DAA fetched={{{', '.join(f'{k}:{v:.1f}' for k, v in fetched.items())}}} "
+            f"cached_hits={cached_hits}"
+        )
+        return {k: _chain_median_cache[k] for k in origin_keys if k in _chain_median_cache}
     except Exception as e:
         logger.warning(f"Could not fetch chain median DAA from DB (falling back to 0): {e}")
-        return {}
+        return {k: _chain_median_cache[k] for k in origin_keys if k in _chain_median_cache}
 
 
 def inject_chain_median_daa(contracts: list[dict], days: int = 7) -> None:
@@ -552,15 +565,8 @@ def _is_protocol_likely(label: dict, blockscout: dict, log_signals: dict, metric
     category = label.get('usage_category', '')
     confidence = label.get('confidence', 0.0)
     success_rate = metrics.get('success_rate')
-    # Treat None success_rate as non-bot (don't penalise missing data)
     if success_rate is None:
         success_rate = 1.0
-
-    # Novel protocol tokens in every tx override trading exclusion.
-    # A contract that interacts with specific protocol tokens on ≥50% of traces
-    # is protocol-specific infrastructure even when classified as trading.
-    if label.get('novel_tokens'):
-        return True
 
     # Hard exclusions (only applies when NOT verified)
     if category in ('trading', 'other'):
@@ -570,11 +576,17 @@ def _is_protocol_likely(label: dict, blockscout: dict, log_signals: dict, metric
     if success_rate < 0.40:
         return False
 
-    # Fast-pass: categories that are always public protocol contracts.
-    # bridge/lending/erc4337 come from pre-computed callee matches (W4 fix).
-    # dex/stablecoin/oracle are confirmed protocol-only from human review data.
+    # Novel protocol tokens in non-trading, non-other contracts signal specific protocol identity.
+    # Gated after trading/other exclusion — a bot trading known tokens is still a bot.
+    if label.get('novel_tokens'):
+        return True
+
+    # Fast-pass: categories with strong public-infrastructure priors.
+    # bridge/lending/erc4337/cc_communication/derivative are confirmed by pre-computed callee matches.
+    # stablecoin/oracle are protocol-only from human review data.
+    # dex excluded: unverified dex-classified contracts can be private strategies with public callers.
     if category in ('bridge', 'lending', 'erc4337', 'cc_communication', 'derivative',
-                    'dex', 'stablecoin', 'oracle'):
+                    'stablecoin', 'oracle'):
         return True
 
     # Strong positive signals — one is sufficient

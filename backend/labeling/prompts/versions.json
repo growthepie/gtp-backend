@@ -1,0 +1,16 @@
+{
+  "current": "v1",
+  "history": [
+    {
+      "version": "v1",
+      "run_id": "2026-05-19_v1",
+      "deployed_at": "2026-05-26T10:07:06.803466+00:00",
+      "lines": 321,
+      "accuracy": {
+        "category_new": "16/31 (51.6%)",
+        "wins_regressions": "Wins** (wrong\u2192right): 16  |  **Regressions** (right\u2192wrong): 0",
+        "name_exact_new": "9/45 (20.0%)"
+      }
+    }
+  ]
+}
