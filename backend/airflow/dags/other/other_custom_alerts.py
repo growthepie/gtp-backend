@@ -96,6 +96,18 @@ def run_dag():
 
         run_app_count_weekly_alert()
 
+    @task
+    def growthepie_birthday_alerts():
+        from src.misc.custom_alerts import run_growthepie_birthday_alerts
+
+        run_growthepie_birthday_alerts()
+
+    @task
+    def chain_listing_date_alerts():
+        from src.misc.custom_alerts import run_chain_listing_date_alerts
+
+        run_chain_listing_date_alerts()
+
     app_ath_alerts()
     pectra_type4_alerts()
     arbitrum_timeboost_alerts()
@@ -108,6 +120,8 @@ def run_dag():
     chain_birthday_alerts()
     app_birthday_alerts()
     app_count_weekly_alert()
+    growthepie_birthday_alerts()
+    chain_listing_date_alerts()
 
 
 run_dag()

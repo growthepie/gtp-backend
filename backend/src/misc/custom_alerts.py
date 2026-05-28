@@ -556,8 +556,8 @@ def run_shopify_usdc_alerts():
         df_customers,
         date_col="date",
         value_col="value",
-        threshold=1_000,
-        label="customers_1k",
+        threshold=5_000,
+        label="customers_5k",
         title="Base Commerce - crossed `{m}` total unique customers milestone",
         fmt=fmt_int,
     )
@@ -966,62 +966,40 @@ def run_robinhood_alerts():
     )
 
     supply_query = """
-        WITH date_range AS (
+        WITH first_seen AS (
+            SELECT
+                rd.contract_address,
+                MIN(rd.date) AS first_seen_date
+            FROM public.robinhood_daily rd
+            INNER JOIN public.robinhood_stock_list rsl
+                ON rd.contract_address = rsl.contract_address
+            WHERE rsl.active = TRUE
+            GROUP BY rd.contract_address
+        ),
+        date_range AS (
             SELECT generate_series(
-                (SELECT MIN(date) FROM public.robinhood_daily),
+                (SELECT MIN(first_seen_date) FROM first_seen),
                 CURRENT_DATE - INTERVAL '1 day',
                 '1 day'::interval
             )::date AS date
-        ),
-        all_stocks AS (
-            SELECT contract_address
-            FROM public.robinhood_stock_list
-        ),
-        grid AS (
-            SELECT s.contract_address, d.date
-            FROM all_stocks s CROSS JOIN date_range d
-        ),
-        daily_metrics AS (
-            SELECT
-                contract_address,
-                date,
-                SUM(CASE WHEN metric_key = 'total_minted' THEN value ELSE 0 END) -
-                SUM(CASE WHEN metric_key = 'total_burned' THEN value ELSE 0 END) AS net_change
-            FROM public.robinhood_daily
-            WHERE metric_key IN ('total_minted', 'total_burned')
-            GROUP BY contract_address, date
-        ),
-        joined AS (
-            SELECT g.contract_address, g.date, COALESCE(dm.net_change, 0) AS net_change
-            FROM grid g
-            LEFT JOIN daily_metrics dm
-                ON g.contract_address = dm.contract_address AND g.date = dm.date
-        ),
-        cum AS (
-            SELECT
-                contract_address,
-                date,
-                SUM(net_change) OVER (
-                    PARTITION BY contract_address
-                    ORDER BY date
-                    ROWS UNBOUNDED PRECEDING
-                ) AS total_supply
-            FROM joined
         )
-        SELECT date, COUNT(*) FILTER (WHERE total_supply > 0) AS total_stocks_tokenized
-        FROM cum
-        GROUP BY date
-        ORDER BY date
+        SELECT
+            d.date,
+            COUNT(*) FILTER (WHERE fs.first_seen_date <= d.date) AS total_deployed_tokenized_assets
+        FROM date_range d
+        CROSS JOIN first_seen fs
+        GROUP BY d.date
+        ORDER BY d.date
     """
     df_supply = db_connector.execute_query(supply_query, load_df=True)
     maybe_send_running_total_milestone_alert(
         alerter,
         df_supply,
         date_col="date",
-        value_col="total_stocks_tokenized",
+        value_col="total_deployed_tokenized_assets",
         threshold=100,
-        label="supply_100",
-        title="Robinhood Stocks - crossed `{m}` total tokenized stocks milestone",
+        label="deployed_assets_100",
+        title="Robinhood Stocks - crossed `{m}` total deployed tokenized contracts/assets milestone",
         fmt=fmt_int,
     )
 
@@ -1260,6 +1238,239 @@ def run_app_birthday_alerts(window_days: int = 7, wednesday_only: bool = True):
         + f"\n[View on growthepie.com]({alerter.url})"
     )
     alerter.send(message)
+
+
+def run_growthepie_birthday_alerts():
+    today = datetime.now(timezone.utc).date()
+    birthday_month = 5
+    birthday_day = 26
+    launch_year = 2025
+
+    this_year_birthday = datetime(today.year, birthday_month, birthday_day, tzinfo=timezone.utc).date()
+    pre_alert_date = this_year_birthday - timedelta(days=7)
+    anniversary_years = this_year_birthday.year - launch_year
+
+    ai_news_webhook = os.getenv("GTP_AI_WEBHOOK_URL")
+    comms_webhook = os.getenv("DISCORD_COMMS")
+
+    if today == pre_alert_date:
+        message = (
+            f"**growthepie birthday reminder**\n"
+            f"One week to go until the anniversary on `{this_year_birthday.isoformat()}` "
+            f"(launched `{launch_year:04d}-{birthday_month:02d}-{birthday_day:02d}`)."
+        )
+        if ai_news_webhook:
+            send_discord_message(message, webhook_url=ai_news_webhook)
+        else:
+            print("growthepie_birthday_alerts: GTP_AI_WEBHOOK_URL not set; skipping ai-news pre-alert.")
+        if comms_webhook:
+            send_discord_message(message, webhook_url=comms_webhook)
+        else:
+            print("growthepie_birthday_alerts: DISCORD_COMMS not set; skipping communications pre-alert.")
+        return
+
+    if today == this_year_birthday:
+        message = (
+            f"**Happy Birthday, growthepie!**\n"
+            f"Today (`{today.isoformat()}`) marks `{anniversary_years}` year"
+            f"{'' if anniversary_years == 1 else 's'} since launch on "
+            f"`{launch_year:04d}-{birthday_month:02d}-{birthday_day:02d}`."
+        )
+        if ai_news_webhook:
+            send_discord_message(message, webhook_url=ai_news_webhook)
+        else:
+            print("growthepie_birthday_alerts: GTP_AI_WEBHOOK_URL not set; skipping ai-news birthday alert.")
+        return
+
+    print("growthepie_birthday_alerts: no alert due today.")
+
+
+CHAIN_LISTING_EVENTS = [
+    {
+        "name": "Ronin",
+        "listing_date": "2026-05-12",
+        "twitter_post": "https://x.com/growthepie_eth/status/2054199877043736703",
+    },
+    {
+        "name": "Starknet",
+        "listing_date": "2024-03-04",
+        "twitter_post": "https://x.com/growthepie_eth/status/1764719001563762837?s=20",
+    },
+    {
+        "name": "Polygon PoS",
+        "listing_date": "2025-12-23",
+        "twitter_post": "https://x.com/growthepie_eth/status/2003482768030990575",
+    },
+    {
+        "name": "MegaETH",
+        "listing_date": "2025-12-18",
+        "twitter_post": "https://x.com/growthepie_eth/status/2001662354111578482",
+    },
+    {
+        "name": "Lisk",
+        "listing_date": "2025-05-16",
+        "twitter_post": "https://x.com/growthepie_eth/status/1923395703772000484",
+    },
+    {
+        "name": "Unichain",
+        "listing_date": "2025-04-23",
+        "twitter_post": "https://x.com/growthepie_eth/status/1915159332607377855",
+    },
+    {
+        "name": "Celo (as L2)",
+        "listing_date": "2025-03-26",
+        "twitter_post": "https://x.com/growthepie_eth/status/1904874370398306774",
+    },
+    {
+        "name": "Fraxtal",
+        "listing_date": "2025-01-14",
+        "twitter_post": "https://x.com/growthepie_eth/status/1879162621435445463",
+    },
+    {
+        "name": "Loopring",
+        "listing_date": "2024-02-06",
+        "twitter_post": "https://x.com/growthepie_eth/status/1754853167869632552",
+    },
+    {
+        "name": "Mantle",
+        "listing_date": "2024-01-30",
+        "twitter_post": "https://x.com/growthepie_eth/status/1752379957152759981",
+    },
+    {
+        "name": "Scroll",
+        "listing_date": "2023-12-20",
+        "twitter_post": "https://x.com/growthepie_eth/status/1737519799880622422",
+    },
+    {
+        "name": "Base",
+        "listing_date": "2023-08-12",
+        "twitter_post": "https://x.com/growthepie_eth/status/1690350934491369472",
+    },
+    {
+        "name": "Ink",
+        "listing_date": "2025-02-20",
+        "twitter_post": "https://x.com/growthepie_eth/status/1892575468492124370",
+    },
+    {
+        "name": "Mode",
+        "listing_date": "2024-04-23",
+        "twitter_post": "https://x.com/growthepie_eth/status/1782754421048303622",
+    },
+    {
+        "name": "Soneium",
+        "listing_date": "2025-02-25",
+        "twitter_post": "https://x.com/growthepie_eth/status/1894388143547158825",
+    },
+    {
+        "name": "World Chain",
+        "listing_date": "2024-10-21",
+        "twitter_post": "https://x.com/growthepie_eth/status/1848368866776244368",
+    },
+    {
+        "name": "Linea",
+        "listing_date": "2023-11-29",
+        "twitter_post": "https://x.com/growthepie_eth/status/1729899845836582963",
+    },
+    {
+        "name": "Manta Pacific",
+        "listing_date": "2024-04-30",
+        "twitter_post": "https://x.com/growthepie_eth/status/1785309399088599505",
+    },
+    {
+        "name": "Metis",
+        "listing_date": "2024-06-20",
+        "twitter_post": "https://x.com/growthepie_eth/status/1803771696375103516",
+    },
+    {
+        "name": "Taiko",
+        "listing_date": "2024-07-09",
+        "twitter_post": "https://x.com/growthepie_eth/status/1810652638595219959",
+    },
+    {
+        "name": "Arbitrum Nova",
+        "listing_date": "2025-03-21",
+        "twitter_post": "https://x.com/growthepie_eth/status/1903087375430938708",
+    },
+    {
+        "name": "Gravity Alpha Mainnet",
+        "listing_date": "2024-10-25",
+        "twitter_post": "https://x.com/growthepie_eth/status/1849813680499675417",
+    },
+    {
+        "name": "Plume Network",
+        "listing_date": "2025-07-24",
+        "twitter_post": "https://x.com/growthepie_eth/status/1948352980584923503",
+    },
+]
+
+
+def run_chain_listing_date_alerts(window_days: int = 10, thursday_only: bool = True):
+    today = datetime.now(timezone.utc).date()
+    if thursday_only and today.weekday() != 3:
+        print(f"chain_listing_date_alerts: today is {today.strftime('%A')}; only runs on Thursday.")
+        return
+
+    webhook_url = os.getenv("GTP_AI_WEBHOOK_URL")
+    if not webhook_url:
+        print("chain_listing_date_alerts: GTP_AI_WEBHOOK_URL not set; skipping.")
+        return
+
+    upcoming = []
+    for event in CHAIN_LISTING_EVENTS:
+        try:
+            listing_date = datetime.strptime(event["listing_date"], "%Y-%m-%d").date()
+        except (KeyError, ValueError):
+            print(f"chain_listing_date_alerts: invalid listing_date for {event.get('name', 'unknown')}; skipping.")
+            continue
+
+        matched_date = None
+        for offset in range(window_days + 1):
+            candidate = today + timedelta(days=offset)
+            try:
+                anniversary = listing_date.replace(year=candidate.year)
+            except ValueError:
+                anniversary = listing_date.replace(year=candidate.year, day=28)
+
+            if anniversary == candidate and candidate >= listing_date:
+                matched_date = candidate
+                break
+
+        if matched_date is None:
+            continue
+
+        upcoming.append(
+            {
+                "name": event["name"],
+                "listing_date": listing_date,
+                "event_date": matched_date,
+                "days_until": (matched_date - today).days,
+                "years_since_listing": matched_date.year - listing_date.year,
+                "twitter_post": event["twitter_post"],
+            }
+        )
+
+    if not upcoming:
+        print(f"chain_listing_date_alerts: no listing dates in next {window_days} days.")
+        return
+
+    upcoming.sort(key=lambda row: (row["event_date"], row["name"].lower()))
+    lines = []
+    for row in upcoming:
+        anniversary_text = (
+            f" ({row['years_since_listing']}y since listing)"
+            if row["years_since_listing"] > 0
+            else " (listing day)"
+        )
+        lines.append(
+            f"`{row['event_date'].isoformat()}` (in {row['days_until']}d): **{row['name']}**"
+            f"{anniversary_text} - {row['twitter_post']}"
+        )
+
+    message = (
+        f"**Upcoming chain listing dates - next {window_days} days**\n"
+        + "\n".join(lines)
+    )
+    send_discord_message(message, webhook_url=webhook_url)
 
 
 APPS_BY_CHAIN_JSON_URL = "https://api.growthepie.com/v1/landing-events/apps-data.json"
