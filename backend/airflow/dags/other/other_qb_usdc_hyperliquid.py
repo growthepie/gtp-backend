@@ -68,10 +68,9 @@ def run_dag():
 
     @task()
     def create_json():
-        from src.adapters.adapter_defillama import AdapterDefillama
         from src.db_connector import DbConnector
         from src.misc.jinja_helper import execute_jinja_query
-        from src.misc.helper_functions import upload_json_to_cf_s3, fix_dict_nan
+        from src.misc.helper_functions import upload_json_to_cf_s3, fix_dict_nan, api_get_call
         import pandas as pd
         import os
 
@@ -88,13 +87,38 @@ def run_dag():
         df = df.sort_values('date').reset_index(drop=True)
         df['date'] = pd.to_datetime(df['date'])
 
-        # get data from defillama adapter
-        ll = AdapterDefillama({}, db_connector)
-        df1 = ll.df_ethereum.loc[ll.df_ethereum['protocol'] == 'Circle USDC']
-        df2 = ll.stables_dfs[2]
+        # get Circle USDC fees and supply directly from DefiLlama
+        fees_url = "https://api.llama.fi/summary/fees/circle-usdc?dataType=dailyFees"
+        fees_response = api_get_call(fees_url)
+        if not fees_response or "totalDataChart" not in fees_response:
+            raise ValueError(f"DefiLlama Circle USDC fees response missing totalDataChart: {fees_url}")
+
+        df1 = pd.DataFrame(
+            [
+                {"unix": int(item[0]), "value": item[1]}
+                for item in fees_response["totalDataChart"]
+            ]
+        )
+        df1['date'] = pd.to_datetime(df1['unix'], unit='s')
+
+        supply_url = "https://stablecoins.llama.fi/stablecoin/2"
+        supply_response = api_get_call(supply_url)
+        if not supply_response or "tokens" not in supply_response:
+            raise ValueError(f"DefiLlama USDC supply response missing tokens: {supply_url}")
+
+        df2 = pd.DataFrame(
+            [
+                {
+                    "unix": int(item["date"]),
+                    "circ_total": item["circulating"]["peggedUSD"],
+                }
+                for item in supply_response["tokens"]
+            ]
+        )
+
         df_merged = df1.merge(df2, how='left', left_on='unix', right_on='unix')
         df_merged['rev_per_usdc'] = df_merged['value'] / df_merged['circ_total']
-        df_merged = df_merged.drop(columns=['protocol', 'value', 'unix'])
+        df_merged = df_merged.drop(columns=['value', 'unix'])
         df_merged = df_merged[df_merged['date'] >= '2024-01-01'].reset_index(drop=True)
 
         # combine db data and defillama data into df_final
