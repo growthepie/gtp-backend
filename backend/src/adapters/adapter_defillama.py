@@ -17,6 +17,10 @@ class AdapterDefillama(AbstractAdapter):
             'Tether': 1,
             'Circle USDC': 2,
         }
+        self.stable_fee_slugs = {
+            'Tether': 'tether',
+            'Circle USDC': 'circle-usdc',
+        }
         self.stables_dfs = self.get_stables_dfs()
         self.df_ethereum = self.get_total_stables_fees_df()
 
@@ -133,21 +137,30 @@ class AdapterDefillama(AbstractAdapter):
         return stables_dfs
     
     def get_total_stables_fees_df(self):
-        ## retrieve ethereum protocol fee data
-        url = f'{self.base_url}overview/fees/offchain?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=false&dataType=dailyFees'
-        response_json = api_get_call(url)
-        
+        ## retrieve stablecoin issuer fee data
         rows = []
-        for item in response_json['totalDataChartBreakdown']:
-            for key, value in item[1:][0].items():
+        for name, slug in self.stable_fee_slugs.items():
+            url = f'{self.base_url}summary/fees/{slug}?dataType=dailyFees'
+            print(f'..fetching: {url}')
+            response_json = api_get_call(url)
+
+            if not response_json or 'totalDataChart' not in response_json:
+                send_discord_message(f"DefiLlama Stable Fees: API call failed for {name} with url {url}.")
+                continue
+
+            for item in response_json['totalDataChart']:
                 rows.append({
                     'unix': item[0],
-                    'protocol': key,
-                    'value': value
+                    'protocol': name,
+                    'value': item[1]
                 })
+
+            time.sleep(1)  # To avoid hitting the API too hard
+
+        if not rows:
+            raise ValueError("DefiLlama Stable Fees: no stablecoin issuer fee rows returned.")
+
         df_ethereum = pd.DataFrame(rows)
-        ## filter down to Tether and Circle (stables keys)
-        df_ethereum = df_ethereum[df_ethereum['protocol'].isin(self.stables.keys())]
         df_ethereum['date'] = pd.to_datetime(df_ethereum['unix'], unit='s')
         return df_ethereum
     
