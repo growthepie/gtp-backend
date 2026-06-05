@@ -20,6 +20,13 @@ def _is_missing_scalar(value):
     except (TypeError, ValueError):
         return False
 
+
+def _first_list_value(value):
+    if isinstance(value, list):
+        return value[0] if len(value) > 0 else None
+    return value
+
+
 # batch upload df to a table
 def push_to_airtable(table, df):
 
@@ -267,6 +274,72 @@ def read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=True):
     df['address'] = df['address'].str.replace('0x', '\\x', regex=False)
     df['attester'] = df['attester'].str.replace('0x', '\\x', regex=False)
 
+    return df
+
+
+def read_pending_label_pool_reattest(api, AIRTABLE_BASE_ID, table):
+    """
+    Read rows from "Label Pool Reattest" that still need review.
+
+    The approval DAG treats approve == True as ready for reattestation, so every
+    row with a missing or non-true approve value is considered pending.
+    """
+    df = read_airtable(table)
+
+    if df.empty:
+        print('no contracts marked for reattesting.')
+        return pd.DataFrame()
+
+    if 'approve' not in df.columns:
+        df['approve'] = False
+
+    df = df[df['approve'].ne(True)].copy()
+    if df.empty:
+        print('no contracts pending approval for reattesting.')
+        return df
+
+    expected_columns = [
+        'address',
+        'origin_key',
+        'contract_name',
+        'owner_project',
+        'usage_category',
+        'attester',
+        'approve',
+        'id',
+    ]
+    for column in expected_columns:
+        if column not in df.columns:
+            df[column] = None
+
+    df = df[expected_columns]
+
+    for column in ['origin_key', 'owner_project', 'usage_category']:
+        df[column] = df[column].apply(_first_list_value)
+
+    if len(df[df["owner_project"].notna()]) > 0:
+        df_owner_projects = read_airtable(api.table(AIRTABLE_BASE_ID, 'OSS Projects'))
+        if not df_owner_projects.empty:
+            owner_project_lookup = df_owner_projects[['id', 'Name']].set_index('id')['Name']
+            df['owner_project'] = df['owner_project'].map(owner_project_lookup).fillna(df['owner_project'])
+
+    if len(df[df["usage_category"].notna()]) > 0:
+        df_usage_categories = read_airtable(api.table(AIRTABLE_BASE_ID, 'Sub Categories'))
+        if not df_usage_categories.empty:
+            usage_category_lookup = df_usage_categories[['id', 'category_id']].set_index('id')['category_id']
+            df['usage_category'] = df['usage_category'].map(usage_category_lookup).fillna(df['usage_category'])
+
+    if len(df[df["origin_key"].notna()]) > 0:
+        df_chains = read_airtable(api.table(AIRTABLE_BASE_ID, 'Chains'))
+        if not df_chains.empty:
+            chain_lookup = df_chains[['id', 'caip2']].set_index('id')['caip2']
+            df['chain_id'] = df['origin_key'].map(chain_lookup).fillna(df['origin_key'])
+        else:
+            df['chain_id'] = df['origin_key']
+    else:
+        df['chain_id'] = None
+
+    df = df.drop(columns=['origin_key'])
     return df
 
 
