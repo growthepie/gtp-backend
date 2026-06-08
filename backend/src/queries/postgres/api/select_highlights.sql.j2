@@ -22,6 +22,20 @@ ath_regular AS (
     AND origin_key = '{{ origin_key }}'
     AND type = 'ath_regular'
 ),
+ath_multiple_since AS (
+  SELECT *
+  FROM public.highlights
+  WHERE date > current_date - interval '{{ days }} days'
+    AND origin_key = '{{ origin_key }}'
+    AND type = 'ath_multiple_since'
+),
+ath_regular_since AS (
+  SELECT *
+  FROM public.highlights
+  WHERE date > current_date - interval '{{ days }} days'
+    AND origin_key = '{{ origin_key }}'
+    AND type = 'ath_regular_since'
+),
 growth AS (
   SELECT *
   FROM public.highlights
@@ -41,14 +55,21 @@ lifetime AS (
     AND value > 0
 ),
 combined AS (
+  -- All-time variants outrank their _since counterparts: when both fire for the same
+  -- metric/day, the per-metric rn=1 dedup keeps the all-time one; a _since-only high
+  -- (beats the since-date baseline but not the all-time max) still surfaces.
   SELECT 1 AS prio, * FROM ath_multiple
   UNION ALL
-  SELECT 2 AS prio, * FROM lifetime
+  SELECT 2 AS prio, * FROM ath_multiple_since
   UNION ALL
-  SELECT 3 AS prio, * FROM ath_regular
+  SELECT 3 AS prio, * FROM lifetime
   UNION ALL
-  SELECT 4 AS prio, * FROM growth
-  
+  SELECT 4 AS prio, * FROM ath_regular
+  UNION ALL
+  SELECT 5 AS prio, * FROM ath_regular_since
+  UNION ALL
+  SELECT 6 AS prio, * FROM growth
+
 ),
 ranked AS (
   SELECT

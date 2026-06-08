@@ -7,6 +7,12 @@
     -   origin_key: string
     -   lookback_days: int (defaults to 7)
     -   thresholds_by_metric: dict[str, list[numeric]]
+    -   since_date: string (optional) - floors the baseline window so the "high" is
+                    measured only against values on/after this date (e.g. '2026-01-30').
+                    Omit for a true all-time high.
+    -   type_suffix: string (optional) - appended to the emitted type values so a
+                    since-date run (e.g. '_since') does not collide with the all-time
+                    run on the highlights PK (date, origin_key, metric_key, type).
 #}
 
 INSERT INTO highlights (date, origin_key, metric_key, type, value, ath_prior_max, ath_next_threshold)
@@ -41,6 +47,9 @@ ranked AS (
   WHERE origin_key = '{{ origin_key }}'
     AND metric_key IN (SELECT metric_key FROM metric_keys)
     AND date < current_date
+    {%- if since_date %}
+    AND date >= '{{ since_date }}'
+    {%- endif %}
 ),
 aths AS (
   -- ATHs that happened in the last {{ lookback_days|default(7) }} days
@@ -71,7 +80,7 @@ SELECT
   metric_key,
   CASE
     WHEN (next_threshold IS NOT NULL AND value >= next_threshold)
-      THEN 'ath_multiple' ELSE 'ath_regular'
+      THEN 'ath_multiple{{ type_suffix | default('') }}' ELSE 'ath_regular{{ type_suffix | default('') }}'
   END AS type,
   value,
   prior_max  AS ath_prior_max,

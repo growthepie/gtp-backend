@@ -133,7 +133,7 @@ def highlights_bot():
                         metric_conf = gtp_metrics_new['chains'][metric_id]
                         metric_fe = metric_conf['url_path'].split('/')[-1]
                         
-                        if highlight_type in ['ath_multiple', 'ath_regular'] or highlight_type.startswith('lifetime_'):
+                        if highlight_type in ['ath_multiple', 'ath_regular', 'ath_multiple_since', 'ath_regular_since'] or highlight_type.startswith('lifetime_'):
                         
                             message = (
                                 f"🥧 **{highlight['metric_name']} {highlight['header']} for {name}: {highlight['value']}**\n\n"

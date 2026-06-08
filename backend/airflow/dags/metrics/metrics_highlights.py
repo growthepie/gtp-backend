@@ -51,7 +51,21 @@ def etl():
                 }
         execute_jinja_query(db_connector, 'chain_metrics/upsert_highlights_ath.sql.j2', query_params)
 
-        
+        ## MegaETH only: additionally track new highs measured since 2026-01-30 (not all-time).
+        ## Emitted as separate highlight types (ath_multiple_since / ath_regular_since) so they
+        ## coexist with megaeth's all-time ATH rows. Same metric set as the regular ATH run.
+        ## Display text for the *_since types lives in helper_functions.highlights_prep().
+        megaeth_high_since = '2026-01-30'
+        query_params = {
+                    "origin_key": "megaeth",
+                    "lookback_days": days,
+                    "thresholds_by_metric": ath_thresholds,
+                    "since_date": megaeth_high_since,
+                    "type_suffix": "_since"
+                }
+        execute_jinja_query(db_connector, 'chain_metrics/upsert_highlights_ath.sql.j2', query_params)
+
+
     
     @task()           
     def run_growth():

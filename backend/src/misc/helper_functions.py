@@ -1177,6 +1177,36 @@ def highlights_prep(df, gtp_metrics):
                 prev_ath = f"{prev_ath_val:,.2f}"
             highlight_text = f"New All-Time High, surpassing previous All-Time High of {prefix}{prev_ath}{suffix}"
             header = 'All-Time High'
+        elif highlight_type == 'ath_multiple_since':
+            # MegaETH-only "new high since 2026-01-30" variant (baseline floor set in
+            # metrics_highlights.py run_aths()); mirrors ath_multiple formatting.
+            ath_val = int(row['ath_next_threshold'])
+            if metric_key == 'gas_per_second':
+                ath_val = ath_val / 1_000_000
+
+            if ath_val >= 1_000_000_000:
+                ath_multiple = f"{ath_val / 1_000_000_000:.2f}B"
+            elif ath_val >= 1_000_000:
+                ath_multiple = f"{ath_val / 1_000_000:.2f}M"
+            elif ath_val > 1_000:
+                ath_multiple = f"{ath_val / 1_000:.2f}K"
+            else:
+                ath_multiple = f"{ath_val:,}"
+            highlight_text = f"New high since 30 Jan 2026, surpassing {prefix}{ath_multiple}{suffix} for the first time in that window"
+            header = 'New High (since 30 Jan 2026)'
+        elif highlight_type == 'ath_regular_since':
+            # MegaETH-only "new high since 2026-01-30" variant; mirrors ath_regular formatting.
+            prev_ath_val = int(row['ath_prior_max'])
+            if prev_ath_val > 1_000_000_000:
+                prev_ath = f"{prev_ath_val / 1_000_000_000:.2f}B"
+            elif prev_ath_val > 1_000_000:
+                prev_ath = f"{prev_ath_val / 1_000_000:.2f}M"
+            elif prev_ath_val > 1_000:
+                prev_ath = f"{prev_ath_val / 1_000:.2f}K"
+            else:
+                prev_ath = f"{prev_ath_val:,.2f}"
+            highlight_text = f"New high since 30 Jan 2026, surpassing previous high of {prefix}{prev_ath}{suffix} in that window"
+            header = 'New High (since 30 Jan 2026)'
         elif highlight_type.startswith('growth_'):
             period = highlight_type.split('_')[1]
             if period == '1':
