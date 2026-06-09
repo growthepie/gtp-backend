@@ -185,40 +185,43 @@ def etl():
 
         github_client = get_github_client()
         message_lines = ["**OSS Directory open PR reminder**"]
-        total_open_prs = 0
+        reminder_pr_count = 0
 
         for repo_config in OSS_DIRECTORY_REPOS:
             repo = github_client.get_repo(repo_config["full_name"])
             open_prs = list(
                 repo.get_pulls(state="open", sort="created", direction="asc")
             )
-            total_open_prs += len(open_prs)
-
-            message_lines.append("")
-            message_lines.append(
-                f"**{repo_config['label']}** ({repo_config['full_name']}): "
-                f"{len(open_prs)} open PRs"
-            )
 
             if repo_config.get("metadata_path"):
                 relevant_lines = []
-                other_lines = []
 
                 for pr in open_prs:
                     relevant = is_metadata_pr(pr, repo_config["metadata_path"])
-                    line = format_pr_line(pr, repo_config, relevant=relevant)
                     if relevant:
+                        line = format_pr_line(pr, repo_config, relevant=True)
                         relevant_lines.append(line)
-                    else:
-                        other_lines.append(line)
+
+                reminder_pr_count += len(relevant_lines)
+                message_lines.append("")
+                message_lines.append(
+                    f"**{repo_config['label']}** ({repo_config['full_name']}): "
+                    f"{len(relevant_lines)} project metadata PRs"
+                )
 
                 append_section(
                     message_lines,
                     f"Project metadata PRs ({repo_config['metadata_path']}):",
                     relevant_lines,
                 )
-                append_section(message_lines, "Other open PRs:", other_lines)
             else:
+                reminder_pr_count += len(open_prs)
+                message_lines.append("")
+                message_lines.append(
+                    f"**{repo_config['label']}** ({repo_config['full_name']}): "
+                    f"{len(open_prs)} open PRs"
+                )
+
                 if open_prs:
                     message_lines.extend(
                         format_pr_line(pr, repo_config) for pr in open_prs
@@ -226,8 +229,8 @@ def etl():
                 else:
                     message_lines.append("- none")
 
-        if total_open_prs == 0:
-            print("No open OSS Directory PRs.")
+        if reminder_pr_count == 0:
+            print("No relevant OSS Directory PRs.")
             return
 
         send_chunked(message_lines, os.getenv("DISCORD_CONTRACTS"))
