@@ -8,6 +8,8 @@ from src.db_connector import DbConnector
 from src.misc.airflow_utils import alert_via_webhook
 from web3 import Web3
 
+RPC_URL = 'https://rpc.linea.build'
+
 CHAIN_NAME = "linea"
 CHUNK_SIZE = 10_000
 ORIGIN_KEY = "linea"
@@ -116,9 +118,8 @@ def run_dag():
     def process_invoice_logs():
         db_connector = DbConnector()
         #rpc_url = db_connector.get_special_use_rpc('linea') # alchemy only allows 10 blocks per getLogs request
-        rpc_url = 'https://rpc.linea.build'
         
-        adapter, w3 = _build_logs_adapter(rpc_url)
+        adapter, w3 = _build_logs_adapter(RPC_URL)
         
         from_block = _resolve_from_block(db_connector, INVOICE_LOOKBACK_DAYS)
         to_block = w3.eth.block_number
@@ -151,7 +152,7 @@ def run_dag():
 
     @task(task_id="process_burn_bridge_logs")
     def process_burn_bridge_logs():
-        adapter, w3 = _build_logs_adapter()
+        adapter, w3 = _build_logs_adapter(RPC_URL)
         db_connector = DbConnector()
         from_block = _resolve_from_block(db_connector, BURN_LOOKBACK_DAYS)
         to_block = w3.eth.block_number
