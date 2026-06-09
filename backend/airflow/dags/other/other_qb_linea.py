@@ -115,7 +115,8 @@ def run_dag():
     @task(task_id="process_invoice_logs")
     def process_invoice_logs():
         db_connector = DbConnector()
-        rpc_url = db_connector.get_special_use_rpc('linea')
+        #rpc_url = db_connector.get_special_use_rpc('linea') # alchemy only allows 10 blocks per getLogs request
+        rpc_url = 'https://rpc.linea.build'
         
         adapter, w3 = _build_logs_adapter(rpc_url)
         
