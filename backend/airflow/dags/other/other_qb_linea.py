@@ -8,7 +8,6 @@ from src.db_connector import DbConnector
 from src.misc.airflow_utils import alert_via_webhook
 from web3 import Web3
 
-RPC_URL = "https://linea.drpc.org"
 CHAIN_NAME = "linea"
 CHUNK_SIZE = 10_000
 ORIGIN_KEY = "linea"
@@ -20,8 +19,8 @@ BURN_TOPIC = "0x0e2419f2e998f267b7ebbe863f0c8144b9bd6741dafa3386eae42e2a460f0167
 INVOICE_LOOKBACK_DAYS = 3
 BURN_LOOKBACK_DAYS = 3
 
-def _build_logs_adapter() -> Tuple[AdapterLogs, Web3]:
-    w3 = Web3(Web3.HTTPProvider(RPC_URL))
+def _build_logs_adapter(rpc_url: str) -> Tuple[AdapterLogs, Web3]:
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
     return AdapterLogs(w3), w3
 
 
@@ -115,8 +114,11 @@ def run_dag():
 
     @task(task_id="process_invoice_logs")
     def process_invoice_logs():
-        adapter, w3 = _build_logs_adapter()
         db_connector = DbConnector()
+        rpc_url = db_connector.get_special_use_rpc('linea')
+        
+        adapter, w3 = _build_logs_adapter(rpc_url)
+        
         from_block = _resolve_from_block(db_connector, INVOICE_LOOKBACK_DAYS)
         to_block = w3.eth.block_number
 
