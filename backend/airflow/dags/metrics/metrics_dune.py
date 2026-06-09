@@ -41,6 +41,11 @@ def etl():
                     'params': {'days': 3}
                 },
                 {
+                    'name': 'shopify_base_commerce',
+                    'query_id': 5302614,
+                    'params': {'days': 3}
+                },
+                {
                     'name': 'mega_fundamentals',
                     'query_id': 6357340,
                     'params': {'days': 3}
