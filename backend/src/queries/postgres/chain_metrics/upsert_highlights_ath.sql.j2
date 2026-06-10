@@ -47,7 +47,7 @@ ranked AS (
   WHERE origin_key = '{{ origin_key }}'
     AND metric_key IN (SELECT metric_key FROM metric_keys)
     AND date < current_date
-    {%- if since_date %}
+    {%- if since_date is defined and since_date %}
     AND date >= '{{ since_date }}'
     {%- endif %}
 ),
