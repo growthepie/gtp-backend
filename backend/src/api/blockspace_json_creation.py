@@ -1,6 +1,8 @@
 import os
+import math
 import simplejson as json
 import pandas as pd
+from datetime import datetime, timezone
 
 from src.main_config import get_main_config, get_all_l2_config
 from src.misc.helper_functions import upload_json_to_cf_s3, db_addresses_to_checksummed_addresses, fix_dict_nan, empty_cloudfront_cache, send_discord_message
@@ -192,6 +194,67 @@ class BlockspaceJSONCreation():
         with open(f'output/{self.api_version}/{path}.json', 'w') as fp:
             json.dump(data, fp, ignore_nan=True)
 
+    def _save_or_upload_json(self, data, path, invalidate=True):
+        ## single entry point that mirrors the local-vs-s3 branching used by every export.
+        ## `path` is relative to the api_version root, e.g. 'blockspace/overview/base'.
+        if self.s3_bucket == None:
+            self.save_to_json(data, path)
+        else:
+            upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/{path}', data, self.cf_distribution_id, invalidate=invalidate)
+
+    ##### ANSWER (precomputed) JSON HELPERS #####
+    @staticmethod
+    def _resolve_value(types, row, name):
+        ## resolve a value out of a (types, row) pair by the column NAME, never a fixed index,
+        ## so an upstream reorder of `types` cannot silently corrupt the value. Returns None if
+        ## the name is absent or the row is malformed.
+        if not isinstance(types, list) or not isinstance(row, (list, tuple)):
+            return None
+        try:
+            idx = types.index(name)
+        except ValueError:
+            return None
+        if idx >= len(row):
+            return None
+        return row[idx]
+
+    @staticmethod
+    def _is_finite_positive(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+
+    @staticmethod
+    def _num(v):
+        ## coerce to a finite number, else 0 (used for L1/L2 totals where a missing slice == 0).
+        return v if (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)) else 0
+
+    @staticmethod
+    def _generated_at_iso():
+        return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def _get_l2_universe(self):
+        ## The curated "L2 universe" shared by the answer endpoints, derived from main_config
+        ## (equivalent to master.json's deployment/bucket fields). Include a chain iff:
+        ##   - api_deployment_flag == 'PROD'  (drops DEV / ZIRCUIT)
+        ##   - bucket not in {'Layer 1', '-'}
+        ##   - origin_key not in {ethereum, polygon_pos, all_l2s, multiple}
+        ## Returns (universe_keys_sorted, excluded_non_l2_keys_sorted). excludedNonL2Keys = PROD,
+        ## non-special chains dropped by the bucket filter (keys, not display names).
+        special = {'ethereum', 'polygon_pos', 'all_l2s', 'multiple'}
+        non_l2_buckets = {'Layer 1', '-'}
+        universe = []
+        excluded = []
+        for chain in self.main_conf:
+            key = chain.origin_key
+            if key in special:
+                continue
+            if getattr(chain, 'api_deployment_flag', None) != 'PROD':
+                continue
+            if getattr(chain, 'bucket', None) in non_l2_buckets:
+                excluded.append(key)
+                continue
+            universe.append(key)
+        return sorted(universe), sorted(excluded)
+
     ##### JSON GENERATION METHODS #####
 
     def create_blockspace_overview_json(self):
@@ -349,7 +412,108 @@ class BlockspaceJSONCreation():
         else:
             upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/blockspace/overview', overview_dict, self.cf_distribution_id)
         print(f'-- DONE -- Blockspace export for overview')
-    
+
+        ## also write the same content split into one file per chain (+ an index)
+        self._write_blockspace_overview_split(overview_dict)
+
+        ## precomputed answer endpoint derived from the same overview dict (finance category only)
+        self._write_answer_defi_l1_vs_l2(overview_dict)
+
+    def _write_answer_defi_l1_vs_l2(self, overview_dict):
+        ## /v1/answers/defi-l1-vs-l2.json — replaces frontend derivation over the full overview.json.
+        ## Source slice: chains.{chain}.overview[window].finance.data (resolved via overview.types).
+        ## L1 = ethereum, L2 = all_l2s; plus top-5 L2 contributors by finance txcount over 30d.
+        chains = overview_dict.get('data', {}).get('chains', {})
+        windows = ['7d', '30d', '90d', '180d', '365d', 'max']
+
+        def finance_metrics(chain_key, window):
+            ch = chains.get(chain_key, {})
+            ov = ch.get('overview', {})
+            types = ov.get('types')
+            fin = ov.get(window, {}).get('finance', {})
+            row = fin.get('data') if isinstance(fin, dict) else None
+            tx = self._resolve_value(types, row, 'txcount_absolute')
+            usd = self._resolve_value(types, row, 'gas_fees_usd_absolute')
+            return tx, usd
+
+        out = {
+            "generatedAtIso": self._generated_at_iso(),
+            "byWindow": {},
+            "topL2Contributors30d": []
+        }
+
+        for w in windows:
+            l1_tx, l1_usd = finance_metrics('ethereum', w)
+            l2_tx, l2_usd = finance_metrics('all_l2s', w)
+            l1_tx, l1_usd, l2_tx, l2_usd = self._num(l1_tx), self._num(l1_usd), self._num(l2_tx), self._num(l2_usd)
+            tot_tx = l1_tx + l2_tx
+            tot_usd = l1_usd + l2_usd
+            out['byWindow'][w] = {
+                "l1Txcount": l1_tx,
+                "l1GasFeesUsd": l1_usd,
+                "l2Txcount": l2_tx,
+                "l2GasFeesUsd": l2_usd,
+                "l2ShareTxcount": (l2_tx / tot_tx) if tot_tx > 0 else None,
+                "l2ShareGasFeesUsd": (l2_usd / tot_usd) if tot_usd > 0 else None,
+            }
+
+        ## top L2 contributors over 30d (every chain except the aggregates / L1s)
+        exclude = {'ethereum', 'all_l2s', 'multiple', 'polygon_pos'}
+        contribs = []
+        for key in chains:
+            if key in exclude:
+                continue
+            tx, usd = finance_metrics(key, '30d')
+            if self._is_finite_positive(tx):
+                contribs.append({
+                    "chainKey": key,
+                    "chainName": chains[key].get('chain_name'),
+                    "txcount": tx,
+                    "gasFeesUsd": self._num(usd),
+                })
+        contribs_total = sum(c['txcount'] for c in contribs)
+        for c in contribs:
+            c['shareOfL2Txs'] = (c['txcount'] / contribs_total) if contribs_total > 0 else None
+        contribs.sort(key=lambda x: x['txcount'], reverse=True)
+        out['topL2Contributors30d'] = contribs[:5]
+
+        out = fix_dict_nan(out, 'answers/defi-l1-vs-l2', False)
+        self._save_or_upload_json(out, 'answers/defi-l1-vs-l2')
+        print('-- DONE -- Answer export for defi-l1-vs-l2')
+
+    def _write_blockspace_overview_split(self, overview_dict):
+        ## Splits the combined blockspace/overview.json into one file per chain so the
+        ## frontend can fetch a single chain instead of the full payload.
+        ## Each split mirrors the combined shape exactly (drop-in subset):
+        ##   blockspace/overview/{origin_key}.json -> {"data": {"metric_id", "chains": {origin_key: ...}}}
+        ## plus blockspace/overview/index.json listing the available chains.
+        metric_id = overview_dict['data'].get('metric_id', 'overview')
+        chains = overview_dict['data']['chains']
+
+        index = {
+            "data": {
+                "metric_id": metric_id,
+                "chains": {}
+            }
+        }
+
+        for origin_key, chain_dict in chains.items():
+            chain_file = {
+                "data": {
+                    "metric_id": metric_id,
+                    "chains": {origin_key: chain_dict}
+                }
+            }
+            # invalidate=False here; we issue one wildcard invalidation at the end instead
+            self._save_or_upload_json(chain_file, f'blockspace/overview/{origin_key}', invalidate=False)
+            index['data']['chains'][origin_key] = {"chain_name": chain_dict.get('chain_name')}
+
+        self._save_or_upload_json(index, f'blockspace/overview/index', invalidate=False)
+
+        if self.s3_bucket != None:
+            empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/blockspace/overview/*')
+        print(f'-- DONE -- Blockspace split export for overview ({len(chains)} chains)')
+
     def create_blockspace_single_chain_json(self, origin_keys:list=None):
         # define the timeframes in days for the overview data
         overview_timeframes = [1, 7, 30, 180, "max"]
@@ -838,6 +1002,107 @@ class BlockspaceJSONCreation():
         else:
             upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/blockspace/category_comparison', comparison_dict, self.cf_distribution_id)
         print(f'-- DONE -- Blockspace export for category_comparison')
+
+        ## also write the same content split into one file per main category (+ an index)
+        self._write_blockspace_comparison_split(comparison_dict)
+
+        ## precomputed answer endpoint derived from the same comparison dict (stablecoin subcat only)
+        self._write_answer_stablecoin_activity(comparison_dict)
+
+    def _write_answer_stablecoin_activity(self, comparison_dict):
+        ## /v1/answers/stablecoin-activity.json — replaces frontend derivation over the full
+        ## category_comparison.json. Source slice: data.token_transfers.subcategories.stablecoin.
+        ## Two metrics x three periods, ranked top-5 over the curated L2 universe.
+        universe, excluded = self._get_l2_universe()
+        universe_set = set(universe)
+
+        out = {
+            "generatedAtIso": self._generated_at_iso(),
+            "universeSize": len(universe),
+            "universeKeys": universe,
+            "excludedNonL2Keys": excluded,
+            "byMetricByPeriod": {
+                "txcount": {"daily": [], "weekly": [], "monthly": []},
+                "gas_spent": {"daily": [], "weekly": [], "monthly": []},
+            }
+        }
+
+        subcat = (comparison_dict.get('data', {})
+                  .get('token_transfers', {})
+                  .get('subcategories', {})
+                  .get('stablecoin'))
+
+        if isinstance(subcat, dict):
+            # txcount -> txcount_absolute ; gas_spent -> gas_fees_absolute_usd (USD)
+            metrics = {"txcount": "txcount_absolute", "gas_spent": "gas_fees_absolute_usd"}
+
+            def ranked_top5(entries):
+                entries.sort(key=lambda x: x['value'], reverse=True)
+                return entries[:5]
+
+            # weekly = aggregated 7d, monthly = aggregated 30d
+            agg = subcat.get('aggregated', {})
+            for period, tf in (("weekly", "7d"), ("monthly", "30d")):
+                data_block = agg.get(tf, {}).get('data', {})
+                types = data_block.get('types')
+                for metric_key, col in metrics.items():
+                    entries = []
+                    for key, row in data_block.items():
+                        if key == 'types' or key not in universe_set:
+                            continue
+                        v = self._resolve_value(types, row, col)
+                        if self._is_finite_positive(v):
+                            entries.append({"key": key, "value": v})
+                    out['byMetricByPeriod'][metric_key][period] = ranked_top5(entries)
+
+            # daily = last element of the .daily[key] series
+            daily_block = subcat.get('daily', {})
+            daily_types = daily_block.get('types')
+            for metric_key, col in metrics.items():
+                entries = []
+                for key, series in daily_block.items():
+                    if key == 'types' or key not in universe_set:
+                        continue
+                    if not isinstance(series, list) or len(series) == 0:
+                        continue
+                    v = self._resolve_value(daily_types, series[-1], col)
+                    if self._is_finite_positive(v):
+                        entries.append({"key": key, "value": v})
+                out['byMetricByPeriod'][metric_key]['daily'] = ranked_top5(entries)
+
+        out = fix_dict_nan(out, 'answers/stablecoin-activity', False)
+        self._save_or_upload_json(out, 'answers/stablecoin-activity')
+        print('-- DONE -- Answer export for stablecoin-activity')
+
+    def _write_blockspace_comparison_split(self, comparison_dict):
+        ## Splits the combined blockspace/category_comparison.json into one file per main
+        ## category so the frontend can fetch a single category instead of the full payload.
+        ## Each split mirrors the combined shape exactly (drop-in subset):
+        ##   blockspace/category_comparison/{main_category}.json -> {"data": {main_category: ...}}
+        ## plus blockspace/category_comparison/index.json listing categories + their subcategories.
+        categories = comparison_dict['data']
+
+        index = {"data": {}}
+
+        for main_cat, main_cat_dict in categories.items():
+            cat_file = {
+                "data": {main_cat: main_cat_dict}
+            }
+            # invalidate=False here; we issue one wildcard invalidation at the end instead
+            self._save_or_upload_json(cat_file, f'blockspace/category_comparison/{main_cat}', invalidate=False)
+
+            # subcategory keys live under subcategories.list (everything else there is a sub_cat dict)
+            subcategories = main_cat_dict.get('subcategories', {}).get('list', [])
+            index['data'][main_cat] = {
+                "type": main_cat_dict.get('type', 'main_category'),
+                "subcategories": subcategories
+            }
+
+        self._save_or_upload_json(index, f'blockspace/category_comparison/index', invalidate=False)
+
+        if self.s3_bucket != None:
+            empty_cloudfront_cache(self.cf_distribution_id, f'/{self.api_version}/blockspace/category_comparison/*')
+        print(f'-- DONE -- Blockspace split export for category_comparison ({len(categories)} categories)')
 
     def create_all_jsons(self):
         self.create_blockspace_overview_json()
