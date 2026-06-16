@@ -10,7 +10,7 @@ from src.db_connector import DbConnector
 
 class BlockspaceJSONCreation():
 
-    def __init__(self, s3_bucket, cf_distribution_id, db_connector:DbConnector, api_version):
+    def __init__(self, s3_bucket, cf_distribution_id, db_connector:DbConnector, api_version, drop_daily_7d_rolling:bool=False):
         ## Constants
         self.api_version = api_version
         self.s3_bucket = s3_bucket
@@ -18,6 +18,12 @@ class BlockspaceJSONCreation():
         self.db_connector = db_connector
         self.main_conf = get_main_config()
         self.all_l2_config = get_all_l2_config()
+
+        ## Feature flag — when ON, the SMALL category_comparison split files omit `daily_7d_rolling`
+        ## (the client recomputes it from `daily`). Default OFF; only flip ON after the frontend PR
+        ## that computes the rolling mean client-side has shipped. The large category_comparison.json
+        ## is never touched by this. Honors env var so ops can flip it without a code change.
+        self.drop_daily_7d_rolling = drop_daily_7d_rolling or os.getenv("BLOCKSPACE_DROP_DAILY_7D_ROLLING", "false").strip().lower() in ("1", "true", "yes")
 
     def _fillna_numeric(self, df: pd.DataFrame) -> pd.DataFrame:
         numeric_cols = df.select_dtypes(include="number").columns
@@ -187,20 +193,54 @@ class BlockspaceJSONCreation():
         return df
     
     ##### FILE HANDLERS #####
-    def save_to_json(self, data, path):
+    def save_to_json(self, data, path, minify=False):
         #create directory if not exists
         os.makedirs(os.path.dirname(f'output/{self.api_version}/{path}.json'), exist_ok=True)
         ## save to file
         with open(f'output/{self.api_version}/{path}.json', 'w') as fp:
-            json.dump(data, fp, ignore_nan=True)
+            if minify:
+                json.dump(data, fp, ignore_nan=True, separators=(",", ":"))
+            else:
+                json.dump(data, fp, ignore_nan=True)
 
-    def _save_or_upload_json(self, data, path, invalidate=True):
+    @staticmethod
+    def _round_sig(x, sig=6):
+        ## round a float to `sig` significant figures (not decimal places), keeping the
+        ## meaningful digits of small shares while shedding trailing float64 noise on large values.
+        if x == 0 or not math.isfinite(x):
+            return x
+        return round(x, -int(math.floor(math.log10(abs(x)))) + (sig - 1))
+
+    @classmethod
+    def _normalize_numbers(cls, o, sig=6):
+        ## Display-lossless precision normalization applied to the SMALL JSONs only:
+        ##   - integer-valued floats -> int (drops the trailing `.0`, e.g. 211515.0 -> 211515)
+        ##   - all other floats -> `sig` significant figures
+        ## Strings (addresses, names, category keys) and ints are left untouched. Builds new
+        ## containers, so the source dict (and therefore the already-written large file) is unaffected.
+        if isinstance(o, bool):
+            return o
+        if isinstance(o, float):
+            if o.is_integer():
+                return int(o)
+            return cls._round_sig(o, sig)
+        if isinstance(o, list):
+            return [cls._normalize_numbers(v, sig) for v in o]
+        if isinstance(o, dict):
+            return {k: cls._normalize_numbers(v, sig) for k, v in o.items()}
+        return o
+
+    def _save_or_upload_json(self, data, path, invalidate=True, normalize=True):
         ## single entry point that mirrors the local-vs-s3 branching used by every export.
         ## `path` is relative to the api_version root, e.g. 'blockspace/overview/base'.
+        ## Small-JSON exports are precision-normalized and minified here; the large combined files
+        ## are written via save_to_json / upload_json_to_cf_s3 directly and are NOT affected.
+        if normalize:
+            data = self._normalize_numbers(data)
         if self.s3_bucket == None:
-            self.save_to_json(data, path)
+            self.save_to_json(data, path, minify=True)
         else:
-            upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/{path}', data, self.cf_distribution_id, invalidate=invalidate)
+            upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/{path}', data, self.cf_distribution_id, invalidate=invalidate, minify=True)
 
     ##### ANSWER (precomputed) JSON HELPERS #####
     @staticmethod
@@ -1074,6 +1114,20 @@ class BlockspaceJSONCreation():
         self._save_or_upload_json(out, 'answers/stablecoin-activity')
         print('-- DONE -- Answer export for stablecoin-activity')
 
+    @staticmethod
+    def _strip_daily_7d_rolling(main_cat_dict):
+        ## Return a copy of one category's dict with `daily_7d_rolling` removed at the category
+        ## level and within every subcategory. Non-mutating (does not touch comparison_dict), so the
+        ## already-written large category_comparison.json and the answer JSONs are unaffected.
+        out = {k: v for k, v in main_cat_dict.items() if k != 'daily_7d_rolling'}
+        subs = main_cat_dict.get('subcategories')
+        if isinstance(subs, dict):
+            out['subcategories'] = {
+                sk: ({k: v for k, v in sv.items() if k != 'daily_7d_rolling'} if isinstance(sv, dict) else sv)
+                for sk, sv in subs.items()
+            }
+        return out
+
     def _write_blockspace_comparison_split(self, comparison_dict):
         ## Splits the combined blockspace/category_comparison.json into one file per main
         ## category so the frontend can fetch a single category instead of the full payload.
@@ -1085,6 +1139,9 @@ class BlockspaceJSONCreation():
         index = {"data": {}}
 
         for main_cat, main_cat_dict in categories.items():
+            # when the flag is ON, omit daily_7d_rolling from the split (client recomputes it from daily)
+            if self.drop_daily_7d_rolling:
+                main_cat_dict = self._strip_daily_7d_rolling(main_cat_dict)
             cat_file = {
                 "data": {main_cat: main_cat_dict}
             }

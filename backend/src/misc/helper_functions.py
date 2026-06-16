@@ -694,12 +694,15 @@ def upload_json_to_cf_s3(
     cf_distribution_id: str,
     invalidate: bool = True,
     cache_control: str | None = None,
-    content_type: str = "application/json"
+    content_type: str = "application/json",
+    minify: bool = False
 ):
     """
     Uploads JSON to S3 and (optionally) sets Cache-Control headers for CloudFront.
     If `cache_control` is provided, it's sent to S3 as the object's CacheControl.
-    
+    If `minify` is True, the JSON is serialized without whitespace (separators=(",", ":"));
+    default False preserves the existing spaced output for all current callers.
+
     # Example cache setting
     SHORT_CACHE = "public, max-age=60, s-maxage=900, stale-while-revalidate=60, stale-if-error=86400"
     max-age: 60 seconds in browser cache -> after 60 seconds browser will revalidate with CDN
@@ -707,7 +710,7 @@ def upload_json_to_cf_s3(
     stale-while-revalidate: 60 seconds -> if CDN cache is stale, still serve stale content while revalidating in the background
     stale-if-error: 86400 seconds -> if CDN cannot reach S3, serve stale content for up to 24 hours
     """
-    details_json = json.dumps(details_dict)
+    details_json = json.dumps(details_dict, separators=(",", ":")) if minify else json.dumps(details_dict)
 
     s3 = boto3.client(
         "s3",
