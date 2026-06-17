@@ -15,6 +15,7 @@ OSS_DIRECTORY_REPOS = [
         "full_name": "opensource-observer/oss-directory",
         "label": "OSO main repo",
         "metadata_path": "data/projects/",
+        "max_age_days": 4,
     },
 ]
 
@@ -137,9 +138,20 @@ def etl():
 
             return False
 
+        def get_pr_age_days(pr):
+            return (datetime.utcnow() - pr.created_at.replace(tzinfo=None)).days
+
+        def is_recent_pr(pr, max_age_days):
+            if max_age_days is None:
+                return True
+
+            return datetime.utcnow() - pr.created_at.replace(tzinfo=None) <= timedelta(
+                days=max_age_days
+            )
+
         def format_pr_line(pr, repo_config, relevant=None):
             author = pr.user.login if pr.user else "unknown"
-            age_days = (datetime.utcnow() - pr.created_at.replace(tzinfo=None)).days
+            age_days = get_pr_age_days(pr)
 
             tags = []
             if repo_config.get("frontend_author") == author:
@@ -197,8 +209,9 @@ def etl():
                 relevant_lines = []
 
                 for pr in open_prs:
-                    relevant = is_metadata_pr(pr, repo_config["metadata_path"])
-                    if relevant:
+                    if is_metadata_pr(pr, repo_config["metadata_path"]) and is_recent_pr(
+                        pr, repo_config.get("max_age_days")
+                    ):
                         line = format_pr_line(pr, repo_config, relevant=True)
                         relevant_lines.append(line)
 
@@ -206,12 +219,14 @@ def etl():
                 message_lines.append("")
                 message_lines.append(
                     f"**{repo_config['label']}** ({repo_config['full_name']}): "
-                    f"{len(relevant_lines)} project metadata PRs"
+                    f"{len(relevant_lines)} recent project metadata PRs"
                 )
 
                 append_section(
                     message_lines,
-                    f"Project metadata PRs ({repo_config['metadata_path']}):",
+                    "Project metadata PRs "
+                    f"({repo_config['metadata_path']}, max age "
+                    f"{repo_config['max_age_days']}d):",
                     relevant_lines,
                 )
             else:
