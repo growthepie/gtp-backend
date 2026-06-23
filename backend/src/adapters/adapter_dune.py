@@ -327,6 +327,10 @@ class AdapterDune(AbstractAdapter):
     def prepare_robinhood_list(self, df):
         # add active column and set to True
         df['active'] = True
+        # Dune uses Robinhood token identifiers; yfinance expects Yahoo symbols.
+        df['ticker'] = df['ticker'].str.replace(r'_(STOCK|ETF)$', '', regex=True)
+        # Private assets without a Yahoo Finance price source cannot be priced here.
+        df.loc[df['ticker'].isin(['SPACEX']), 'active'] = False
         # set index to contract_address
         df = df.set_index(['contract_address'])
         return df
