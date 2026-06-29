@@ -30,7 +30,7 @@ def check():
         db_connector = DbConnector()
 
         for chain in main_config:
-            if chain.api_deployment_flag != 'PROD' or chain.origin_key in ['loopring', 'megaeth', 'polygon_pos', 'ronin']:
+            if chain.api_deployment_flag != 'PROD' or chain.origin_key in ['loopring', 'megaeth', 'polygon_pos', 'ronin', 'taiko']: ## TODO: remove Taiko once it is back online
                 continue
             
             test_time = 60
