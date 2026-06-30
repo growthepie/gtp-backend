@@ -1461,8 +1461,29 @@ class DbConnector:
         # This function is used to aggregate the blockspace data from contract_level, map it to categories, and then it will be loaded into the sub_category level table. The data will be loaded into fact_sub_category_level table
         def get_blockspace_sub_categories(self, chain, days):
                 exec_string = f'''
+                        WITH exact_labels AS (
+                                SELECT
+                                        address,
+                                        origin_key,
+                                        contract_name,
+                                        owner_project,
+                                        usage_category
+                                FROM public.vw_oli_label_pool_gold_pivoted_v2
+                                WHERE owner_project IS NOT NULL
+                        ),
+                        cross_chain_labels AS (
+                                SELECT
+                                        address,
+                                        min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                                        min(owner_project) AS owner_project,
+                                        min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+                                FROM exact_labels
+                                GROUP BY address
+                                HAVING count(DISTINCT owner_project) = 1
+                                        AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
+                        )
                         SELECT 
-                                lower(bl.usage_category) as category_id,
+                                lower(coalesce(bl.usage_category, cc.usage_category)) as category_id,
                                 '{chain}' as origin_key,
                                 date,
                                 sum(gas_fees_eth) as gas_fees_eth,
@@ -1470,12 +1491,14 @@ class DbConnector:
                                 sum(txcount) as txcount,
                                 sum(daa) as daa
                         FROM public.blockspace_fact_contract_level cl
-                        inner join vw_oli_label_pool_gold_pivoted_v2 bl on cl.address = bl.address and cl.origin_key = bl.origin_key 
-                        inner join vw_oli_category_mapping oli on oli.category_id = bl.usage_category
+                        left join exact_labels bl on cl.address = bl.address and cl.origin_key = bl.origin_key
+                        left join cross_chain_labels cc on cl.address = cc.address
+                        inner join vw_oli_category_mapping oli on oli.category_id = coalesce(bl.usage_category, cc.usage_category)
                         where date < DATE_TRUNC('day', NOW())
                                 and date >= DATE_TRUNC('day', NOW() - INTERVAL '{days} days')
                                 and cl.origin_key = '{chain}'
-                                and bl.usage_category is not null and bl.usage_category <> 'contract_deployment'
+                                and coalesce(bl.usage_category, cc.usage_category) is not null
+                                and coalesce(bl.usage_category, cc.usage_category) <> 'contract_deployment'
                         group by 1,2,3
                 '''
                 df = pd.read_sql(exec_string, self.engine.connect())
@@ -1538,7 +1561,7 @@ class DbConnector:
                 if main_category.lower() != 'unlabeled':
                         main_category_string = f"and bcm.main_category_id = lower('{main_category}')" 
                         sub_main_string = """
-                                bl.usage_category as sub_category_key,
+                                coalesce(bl.usage_category, cc.usage_category) as sub_category_key,
                                 bcm.category_name as sub_category_name,
                                 bcm.main_category_id as main_category_key,
                                 bcm.main_category_name,
@@ -1553,11 +1576,32 @@ class DbConnector:
                         """       
 
                 exec_string = f'''
-                        with top_contracts as (
+                        with exact_labels AS (
+                                SELECT
+                                        address,
+                                        origin_key,
+                                        contract_name,
+                                        owner_project,
+                                        usage_category
+                                FROM public.vw_oli_label_pool_gold_pivoted_v2
+                                WHERE owner_project IS NOT NULL
+                        ),
+                        cross_chain_labels AS (
+                                SELECT
+                                        address,
+                                        min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                                        min(owner_project) AS owner_project,
+                                        min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+                                FROM exact_labels
+                                GROUP BY address
+                                HAVING count(DISTINCT owner_project) = 1
+                                        AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
+                        ),
+                        top_contracts as (
                                 SELECT 
                                         cl.address,
                                         cl.origin_key,
-                                        UPPER(LEFT(bl.contract_name , 1)) || SUBSTRING(bl.contract_name FROM 2) as contract_name,
+                                        UPPER(LEFT(coalesce(bl.contract_name, cc.contract_name) , 1)) || SUBSTRING(coalesce(bl.contract_name, cc.contract_name) FROM 2) as contract_name,
                                         oss.display_name as project_name,
                                         {sub_main_string}
                                         sum(gas_fees_eth) as gas_fees_eth,
@@ -1565,9 +1609,10 @@ class DbConnector:
                                         sum(txcount) as txcount,
                                         round(avg(daa)) as daa
                                 FROM public.blockspace_fact_contract_level cl
-                                left join vw_oli_label_pool_gold_pivoted_v2 bl on cl.address = bl.address and cl.origin_key = bl.origin_key 
-                                left join vw_oli_category_mapping bcm on lower(bl.usage_category) = lower(bcm.category_id) 
-                                left join oli_oss_directory oss on bl.owner_project = oss.name
+                                left join exact_labels bl on cl.address = bl.address and cl.origin_key = bl.origin_key
+                                left join cross_chain_labels cc on cl.address = cc.address
+                                left join vw_oli_category_mapping bcm on lower(coalesce(bl.usage_category, cc.usage_category)) = lower(bcm.category_id)
+                                left join oli_oss_directory oss on coalesce(bl.owner_project, cc.owner_project) = oss.name
                                 where 
                                         date < DATE_TRUNC('day', NOW())
                                         {date_string}
@@ -1628,13 +1673,34 @@ class DbConnector:
 
                 exec_string = f'''
                         -- get top 6 contracts by gas fees for all chains for the given time period
-                        with top_contracts as (
+                        with exact_labels AS (
+                                SELECT
+                                        address,
+                                        origin_key,
+                                        contract_name,
+                                        owner_project,
+                                        usage_category
+                                FROM public.vw_oli_label_pool_gold_pivoted_v2
+                                WHERE owner_project IS NOT NULL
+                        ),
+                        cross_chain_labels AS (
+                                SELECT
+                                        address,
+                                        min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                                        min(owner_project) AS owner_project,
+                                        min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+                                FROM exact_labels
+                                GROUP BY address
+                                HAVING count(DISTINCT owner_project) = 1
+                                        AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
+                        ),
+                        top_contracts as (
                                 SELECT
                                         cl.address,
                                         cl.origin_key,
-                                        UPPER(LEFT(bl.contract_name , 1)) || SUBSTRING(bl.contract_name FROM 2) as contract_name,
+                                        UPPER(LEFT(coalesce(bl.contract_name, cc.contract_name) , 1)) || SUBSTRING(coalesce(bl.contract_name, cc.contract_name) FROM 2) as contract_name,
                                         oss.display_name as project_name,
-                                        bl.usage_category as sub_category_key,
+                                        coalesce(bl.usage_category, cc.usage_category) as sub_category_key,
                                         bcm.category_name as sub_category_name,
                                         bcm.main_category_id as main_category_key,
                                         bcm.main_category_name,
@@ -1643,9 +1709,10 @@ class DbConnector:
                                         sum(txcount) as txcount,
                                         round(avg(daa)) as daa
                                 FROM public.blockspace_fact_contract_level cl
-                                left join vw_oli_label_pool_gold_pivoted_v2 bl on cl.address = bl.address and cl.origin_key = bl.origin_key
-                                left join vw_oli_category_mapping bcm on lower(bl.usage_category) = lower(bcm.category_id)
-                                left join oli_oss_directory oss on bl.owner_project = oss.name
+                                left join exact_labels bl on cl.address = bl.address and cl.origin_key = bl.origin_key
+                                left join cross_chain_labels cc on cl.address = cc.address
+                                left join vw_oli_category_mapping bcm on lower(coalesce(bl.usage_category, cc.usage_category)) = lower(bcm.category_id)
+                                left join oli_oss_directory oss on coalesce(bl.owner_project, cc.owner_project) = oss.name
                                 where
                                         date < DATE_TRUNC('day', NOW())
                                         and date >= DATE_TRUNC('day', NOW() - INTERVAL '{days} days')
@@ -1717,7 +1784,7 @@ class DbConnector:
                 if main_category.lower() != 'unlabeled':
                         main_category_string = f"and bcm.main_category_id = lower('{main_category}')"
                         sub_main_string = """
-                                bl.usage_category as sub_category_key,
+                                coalesce(bl.usage_category, cc.usage_category) as sub_category_key,
                                 bcm.category_name as sub_category_name,
                                 bcm.main_category_id as main_category_key,
                                 bcm.main_category_name,
@@ -1733,11 +1800,32 @@ class DbConnector:
 
 
                 exec_string = f'''
-                        with top_contracts as (
+                        with exact_labels AS (
+                                SELECT
+                                        address,
+                                        origin_key,
+                                        contract_name,
+                                        owner_project,
+                                        usage_category
+                                FROM public.vw_oli_label_pool_gold_pivoted_v2
+                                WHERE owner_project IS NOT NULL
+                        ),
+                        cross_chain_labels AS (
+                                SELECT
+                                        address,
+                                        min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                                        min(owner_project) AS owner_project,
+                                        min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+                                FROM exact_labels
+                                GROUP BY address
+                                HAVING count(DISTINCT owner_project) = 1
+                                        AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
+                        ),
+                        top_contracts as (
                                 SELECT
                                         cl.address,
                                         cl.origin_key,
-                                        UPPER(LEFT(bl.contract_name , 1)) || SUBSTRING(bl.contract_name FROM 2) as contract_name,
+                                        UPPER(LEFT(coalesce(bl.contract_name, cc.contract_name) , 1)) || SUBSTRING(coalesce(bl.contract_name, cc.contract_name) FROM 2) as contract_name,
                                         oss.display_name as project_name,
                                         {sub_main_string}
                                         sum(gas_fees_eth) as gas_fees_eth,
@@ -1745,9 +1833,10 @@ class DbConnector:
                                         sum(txcount) as txcount,
                                         round(avg(daa)) as daa
                                 FROM public.blockspace_fact_contract_level cl
-                                left join vw_oli_label_pool_gold_pivoted_v2 bl on cl.address = bl.address and cl.origin_key = bl.origin_key
-                                left join vw_oli_category_mapping bcm on lower(bl.usage_category) = lower(bcm.category_id)
-                                left join oli_oss_directory oss on bl.owner_project = oss.name
+                                left join exact_labels bl on cl.address = bl.address and cl.origin_key = bl.origin_key
+                                left join cross_chain_labels cc on cl.address = cc.address
+                                left join vw_oli_category_mapping bcm on lower(coalesce(bl.usage_category, cc.usage_category)) = lower(bcm.category_id)
+                                left join oli_oss_directory oss on coalesce(bl.owner_project, cc.owner_project) = oss.name
                                 where
                                         date < DATE_TRUNC('day', NOW())
                                         and cl.origin_key IN ('{"','".join(origin_keys)}')

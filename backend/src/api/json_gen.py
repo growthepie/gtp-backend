@@ -666,24 +666,50 @@ class JsonGen():
             return
 
         query = f"""
-            WITH base AS (
+            WITH exact_labels AS (
+                SELECT
+                    address,
+                    origin_key,
+                    contract_name,
+                    owner_project,
+                    usage_category
+                FROM public.vw_oli_label_pool_gold_pivoted_v2
+                WHERE owner_project IS NOT NULL
+            ),
+            cross_chain_labels AS (
+                SELECT
+                    address,
+                    min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                    min(owner_project) AS owner_project,
+                    min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+                FROM exact_labels
+                GROUP BY address
+                HAVING count(DISTINCT owner_project) = 1
+                    AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
+            ),
+            base AS (
                 SELECT 
                     fact.date,
                     concat('0x', encode(fact.address, 'hex')) AS address,
                     fact.origin_key,
-                    oli.contract_name,
-                    coalesce(oli.owner_project, 'unlabeled') AS owner_project,
+                    coalesce(exact.contract_name, cross_chain.contract_name) AS contract_name,
+                    coalesce(exact.owner_project, cross_chain.owner_project, 'unlabeled') AS owner_project,
                     coalesce(cat.main_category_id, 'unlabeled') AS main_category_key,
-                    coalesce(oli.usage_category, 'unlabeled') AS sub_category_key,
+                    coalesce(coalesce(exact.usage_category, cross_chain.usage_category), 'unlabeled') AS sub_category_key,
                     sum(fact.txcount) AS txcount,
                     sum(fact.gas_fees_eth) AS fees_paid_eth,
                     sum(fact.gas_fees_usd) AS fees_paid_usd,
                     sum(fact.daa) AS daa
                 FROM blockspace_fact_contract_level fact
-                LEFT JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
-                LEFT JOIN oli_categories cat ON oli.usage_category = cat.category_id::text
-                WHERE date >= current_date - interval '7 days'
-                    AND origin_key IN ({','.join([f"'{chain}'" for chain in chain_list])})
+                LEFT JOIN exact_labels exact
+                    ON fact.address = exact.address
+                    AND fact.origin_key = exact.origin_key
+                LEFT JOIN cross_chain_labels cross_chain
+                    ON fact.address = cross_chain.address
+                LEFT JOIN oli_categories cat
+                    ON coalesce(exact.usage_category, cross_chain.usage_category) = cat.category_id::text
+                WHERE fact.date >= current_date - interval '7 days'
+                    AND fact.origin_key IN ({','.join([f"'{chain}'" for chain in chain_list])})
                 GROUP BY 1,2,3,4,5,6,7
                 ),
                 unlabeled AS (

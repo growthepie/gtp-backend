@@ -11,25 +11,49 @@ with eth_price as (
         SELECT "date", value
         FROM fact_kpis
         WHERE metric_key = 'price_usd' and origin_key = 'ethereum'
+),
+exact_labels as (
+        SELECT
+                address,
+                origin_key,
+                contract_name,
+                owner_project,
+                usage_category
+        FROM vw_oli_label_pool_gold_pivoted_v2
+        WHERE owner_project IS NOT NULL
+),
+cross_chain_labels as (
+        SELECT
+                address,
+                min(contract_name) FILTER (WHERE contract_name IS NOT NULL) AS contract_name,
+                min(owner_project) AS owner_project,
+                min(usage_category) FILTER (WHERE usage_category IS NOT NULL) AS usage_category
+        FROM exact_labels
+        GROUP BY address
+        HAVING count(DISTINCT owner_project) = 1
+                AND count(DISTINCT usage_category) FILTER (WHERE usage_category IS NOT NULL) <= 1
 )
 
 SELECT 
 	to_address as address, 
-	l.contract_name, 
-	l.owner_project,
-	l.usage_category as sub_category_key, 
+	coalesce(l.contract_name, cc.contract_name) as contract_name, 
+	coalesce(l.owner_project, cc.owner_project) as owner_project,
+	coalesce(l.usage_category, cc.usage_category) as sub_category_key, 
 	o.main_category_id as main_category_key,
 	count(*) as txcount, 
 	sum(tx_fee) as gas_fees_eth,
 	sum(tx_fee * e.value) as gas_fees_usd
 FROM public.{{ origin_key }}_tx tx
-left join vw_oli_label_pool_gold_pivoted_v2 l on tx.to_address = l.address
+left join exact_labels l
+        on tx.to_address = l.address
+        and l.origin_key = '{{ origin_key }}'
+left join cross_chain_labels cc on tx.to_address = cc.address
 left join eth_price e on e.date = tx.block_date
-left join oli_categories o on l.usage_category = o.category_id
+left join oli_categories o on coalesce(l.usage_category, cc.usage_category) = o.category_id
 where tx.block_date >= date_trunc('day',now()) - interval '{{ days }} days'
 	and tx.block_date < current_date
 	and tx.nonce = 0
-	and l.origin_key = '{{ origin_key }}'
+	and coalesce(l.owner_project, cc.owner_project) is not null
 group by 1,2,3,4,5
 order by 6 desc
 limit {{ limit }}

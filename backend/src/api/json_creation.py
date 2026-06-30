@@ -2145,7 +2145,16 @@ class JSONCreation():
     def get_app_overview_data(self, chains:list, timeframe:int):
         chains_str = ', '.join([f"'{chain}'" for chain in chains])
         exec_string = f"""
-            with apps_mat as (
+            with app_contracts as (
+            SELECT DISTINCT
+                address,
+                origin_key,
+                owner_project
+            FROM vw_apps_contract_level_materialized
+            WHERE "date" >= current_date - interval '{timeframe*2} days'
+                AND origin_key IN ({chains_str})
+            ),
+            apps_mat as (
             SELECT 
                 fact.owner_project, 
                 fact.origin_key,
@@ -2172,10 +2181,9 @@ class JSONCreation():
                     coalesce(hll_cardinality(hll_union_agg(case when "date" > current_date - interval '{timeframe+1} days' then hll_addresses end))::int, 0) as daa, 
                     coalesce(hll_cardinality(hll_union_agg(case when "date" < current_date - interval '{timeframe} days' then hll_addresses end))::int, 0) as prev_daa
                 FROM public.fact_active_addresses_contract_hll fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+                JOIN app_contracts oli USING (address, origin_key)
                 WHERE "date" >= current_date - interval '{timeframe*2} days'
                     AND fact.origin_key IN ({chains_str})
-                    AND oli.owner_project IS NOT NULL
                 GROUP BY 1, 2
             ) aa USING (owner_project, origin_key)
         """
@@ -2305,7 +2313,15 @@ class JSONCreation():
         chains_str = ', '.join([f"'{chain}'" for chain in chains])
 
         exec_string = f"""
-            with metrics_raw as (
+            with app_contracts as (
+                SELECT DISTINCT
+                    address,
+                    origin_key
+                FROM vw_apps_contract_level_materialized
+                WHERE owner_project = '{owner_project}'
+                    AND origin_key IN ({chains_str})
+            ),
+            metrics_raw as (
                 SELECT 
                     origin_key,
                     date, 
@@ -2326,10 +2342,9 @@ class JSONCreation():
                     origin_key,
                     coalesce(hll_cardinality(hll_union_agg(hll_addresses))::int, 0) as daa
                 FROM public.fact_active_addresses_contract_hll fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+                JOIN app_contracts USING (address, origin_key)
                 WHERE 
-                    owner_project = '{owner_project}'
-                    AND fact.origin_key IN ({chains_str})	
+                    fact.origin_key IN ({chains_str})	
                 group by 1,2
             )
             
@@ -2384,7 +2399,15 @@ class JSONCreation():
         chains_str = ', '.join([f"'{chain}'" for chain in chains])
 
         exec_string = f"""
-            with metrics_raw as (
+            with app_contracts as (
+                SELECT DISTINCT
+                    address,
+                    origin_key
+                FROM vw_apps_contract_level_materialized
+                WHERE owner_project = '{owner_project}'
+                    AND origin_key IN ({chains_str})
+            ),
+            metrics_raw as (
                 SELECT 
                     origin_key,
                     hour, 
@@ -2393,12 +2416,10 @@ class JSONCreation():
                     SUM(gas_fees_usd) AS fees_paid_usd,
                     SUM(txcount * success_rate)/SUM(txcount) as success_rate
                 FROM blockspace_fact_contract_level_hourly AS fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
-                LEFT JOIN oli_categories cat ON oli.usage_category = cat.category_id::text
+                JOIN app_contracts USING (address, origin_key)
                 WHERE 
-                    oli.owner_project = '{owner_project}'
-                AND fact.origin_key IN ({chains_str})
-                AND hour >= date_trunc('hour', now()) - interval '14 days'
+                    fact.origin_key IN ({chains_str})
+                    AND hour >= date_trunc('hour', now()) - interval '14 days'
                 GROUP BY 1,2
             ),
             
@@ -2408,10 +2429,9 @@ class JSONCreation():
                     origin_key,
                     coalesce(hll_cardinality(hll_union_agg(hll_addresses))::int, 0) as daa
                 FROM public.fact_active_addresses_contract_hourly_hll fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+                JOIN app_contracts USING (address, origin_key)
                 WHERE 
-                    owner_project = '{owner_project}'
-                    AND fact.origin_key IN ({chains_str})	
+                    fact.origin_key IN ({chains_str})	
                     AND hour >= date_trunc('hour', now()) - interval '14 days'
                 group by 1,2
             )
@@ -2461,7 +2481,31 @@ class JSONCreation():
         chains_str = ', '.join([f"'{chain}'" for chain in chains])
 
         exec_string = f"""
-            with apps_mat as (
+            with app_contracts as (
+                SELECT DISTINCT
+                    address,
+                    origin_key,
+                    contract_name,
+                    main_category_key,
+                    sub_category_key
+                FROM vw_apps_contract_level_materialized
+                WHERE owner_project = '{owner_project}'
+                    AND origin_key IN ({chains_str})
+                
+                UNION
+                
+                SELECT DISTINCT
+                    l.address,
+                    l.origin_key,
+                    l.contract_name,
+                    oli.main_category_id as main_category_key,
+                    l.usage_category as sub_category_key
+                FROM vw_oli_label_pool_gold_pivoted_v2 l
+                left join oli_categories oli on l.usage_category = oli.category_id
+                WHERE l.owner_project = '{owner_project}'
+                    AND l.origin_key IN ({chains_str})
+            ),
+            apps_mat as (
                 SELECT 
                     address,
                     UPPER(LEFT(contract_name , 1)) || SUBSTRING(contract_name FROM 2) as name,
@@ -2492,10 +2536,9 @@ class JSONCreation():
                     origin_key, 
                     hll_cardinality(hll_union_agg(hll_addresses))::int AS daa
                 FROM public.fact_active_addresses_contract_hll fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+                JOIN app_contracts USING (address, origin_key)
                 WHERE 
-                    oli.owner_project  = '{owner_project}'
-                    AND fact.origin_key IN ({chains_str})
+                    fact.origin_key IN ({chains_str})
                     and fact.date < current_date
                     and fact.date >= current_date - interval '{days} days'
                 GROUP BY 1, 2
@@ -2506,21 +2549,18 @@ class JSONCreation():
             SELECT DISTINCT
                 l.address,
                 UPPER(LEFT(l.contract_name , 1)) || SUBSTRING(l.contract_name FROM 2) as name,
-                oli.main_category_id as main_category_key,
-                l.usage_category as sub_category_key,
+                l.main_category_key,
+                l.sub_category_key,
                 l.origin_key,
                 vc.address IS NOT NULL AS verified,
                 0 AS txcount,
                 0 AS fees_paid_eth,
                 0 AS fees_paid_usd,
                 0 AS daa
-            FROM vw_oli_label_pool_gold_pivoted_v2 l
+            FROM app_contracts l
             LEFT JOIN mv_verified_contracts vc USING (address)
-            left join oli_categories oli on l.usage_category = oli.category_id
             WHERE 
-                l.owner_project = '{owner_project}'
-                AND l.origin_key IN  ({chains_str})
-                AND NOT EXISTS (
+                NOT EXISTS (
                     SELECT 1
                     FROM apps_mat fact
                     WHERE fact.address = l.address
@@ -2542,10 +2582,14 @@ class JSONCreation():
             SELECT 
                 coalesce(hll_cardinality(hll_union_agg(case when "date" > current_date - interval '{timeframe+1} days' then hll_addresses end))::int, 0) as val
             FROM public.fact_active_addresses_contract_hll fact
-            JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+            JOIN (
+                SELECT DISTINCT address, origin_key
+                FROM vw_apps_contract_level_materialized
+                WHERE owner_project = '{owner_project}'
+                    AND origin_key = '{origin_key}'
+            ) app_contracts USING (address, origin_key)
             WHERE 
-                owner_project = '{owner_project}'
-                AND fact.origin_key = '{origin_key}'
+                fact.origin_key = '{origin_key}'
                 AND "date" >= current_date - interval '{timeframe} days'
             """
         )

@@ -254,9 +254,17 @@ def load_app_metric_histories(
                 fact.date,
                 COALESCE(hll_cardinality(hll_union_agg(fact.hll_addresses))::numeric, 0) AS value
             FROM public.fact_active_addresses_contract_hll fact
-            JOIN public.vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
-            WHERE oli.owner_project IN ({owners_sql})
-              AND fact.origin_key IN ({origin_keys_sql})
+            JOIN (
+                SELECT DISTINCT
+                    address,
+                    origin_key,
+                    owner_project
+                FROM public.vw_apps_contract_level_materialized
+                WHERE owner_project IN ({owners_sql})
+                  AND origin_key IN ({origin_keys_sql})
+                  AND date < CURRENT_DATE
+            ) oli USING (address, origin_key)
+            WHERE fact.origin_key IN ({origin_keys_sql})
               AND fact.date < CURRENT_DATE
             GROUP BY 1, 2
         """

@@ -619,7 +619,18 @@ class SeoJsonBuilder:
             return {}
         chains_sql = ", ".join(f"'{chain}'" for chain in chain_keys)
         query = f"""
-            WITH apps_mat AS (
+            WITH app_contracts AS (
+                SELECT DISTINCT
+                    address,
+                    origin_key,
+                    owner_project
+                FROM vw_apps_contract_level_materialized
+                WHERE date >= current_date - interval '14 days'
+                    AND date < current_date
+                    AND origin_key IN ({chains_sql})
+                    AND owner_project IS NOT NULL
+            ),
+            apps_mat AS (
                 SELECT
                     fact.owner_project,
                     fact.origin_key,
@@ -641,11 +652,10 @@ class SeoJsonBuilder:
                     COALESCE(hll_cardinality(hll_union_agg(CASE WHEN fact.date > current_date - interval '8 days' THEN hll_addresses END))::int, 0) AS daa,
                     COALESCE(hll_cardinality(hll_union_agg(CASE WHEN fact.date <= current_date - interval '8 days' THEN hll_addresses END))::int, 0) AS prev_daa
                 FROM public.fact_active_addresses_contract_hll fact
-                JOIN vw_oli_label_pool_gold_pivoted_v2 oli USING (address, origin_key)
+                JOIN app_contracts oli USING (address, origin_key)
                 WHERE fact.date >= current_date - interval '14 days'
                     AND fact.date < current_date
                     AND fact.origin_key IN ({chains_sql})
-                    AND oli.owner_project IS NOT NULL
                 GROUP BY 1,2
             )
             SELECT
