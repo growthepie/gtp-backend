@@ -2498,10 +2498,10 @@ class JSONCreation():
                     l.address,
                     l.origin_key,
                     l.contract_name,
-                    oli.main_category_id as main_category_key,
+                    cat.main_category_id as main_category_key,
                     l.usage_category as sub_category_key
-                FROM vw_oli_label_pool_gold_pivoted_v2 l
-                left join oli_categories oli on l.usage_category = oli.category_id
+                FROM vw_oli_label_pool_gold_pivoted_cross_chain_v1 l
+                left join oli_categories cat on l.usage_category = cat.category_id
                 WHERE l.owner_project = '{owner_project}'
                     AND l.origin_key IN ({chains_str})
             ),

@@ -734,6 +734,7 @@ def etl():
         materialized_views = [
             'vw_oli_label_pool_gold_v2',
             'vw_oli_label_pool_gold_pivoted_v2',
+            'vw_oli_label_pool_gold_pivoted_cross_chain_v1',
             'mv_verified_contracts'
         ]
         for view in materialized_views:
