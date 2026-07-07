@@ -253,6 +253,15 @@ def etl():
             )
             df_attested = df_attested[['address', 'attester', 'chain_id', 'contract_name', 'owner_project', 'usage_category']]
 
+            def normalize_attester(value):
+                if isinstance(value, memoryview):
+                    value = value.tobytes()
+                if isinstance(value, (bytes, bytearray)):
+                    return '0x' + bytes(value).hex()
+                return str(value).replace('\\x', '0x').lower()
+
+            df_attested['_attester_key'] = df_attested['attester'].apply(normalize_attester)
+
             # from airtable, get the labels that are in the Label Pool Reattest table
             AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
             AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
@@ -262,16 +271,20 @@ def etl():
             # read all approved labels in 'Label Pool Reattest'
             df_in_airtable = at.read_all_label_pool_reattest(api, AIRTABLE_BASE_ID, table, approved=False)
 
-            ## create df_new with rows that are in df_air but not in df based on all columns
+            ## create df_new with source attestations that are not already pending in Airtable
             if df_in_airtable is None:
                 df_new = df_attested
             else:
-                df_in_airtable = df_in_airtable[['address', 'chain_id', 'contract_name', 'owner_project', 'usage_category']]
+                df_in_airtable = df_in_airtable[['address', 'chain_id', 'attester']]
                 df_in_airtable['address'] = df_in_airtable['address'].str.replace('\\x', '0x')
-                df_new = df_attested.merge(df_in_airtable, on=['address', 'chain_id', 'contract_name', 'owner_project', 'usage_category'], how='left', indicator=True)
+                df_in_airtable['_attester_key'] = df_in_airtable['attester'].apply(normalize_attester)
+                df_in_airtable = df_in_airtable[['address', 'chain_id', '_attester_key']]
+                df_new = df_attested.merge(df_in_airtable, on=['address', 'chain_id', '_attester_key'], how='left', indicator=True)
                 df_new = df_new[df_new['_merge'] == 'left_only']
-                df_new = df_new.drop(columns=['_merge'])
-            
+                df_new = df_new.drop(columns=['_merge', '_attester_key'])
+            if '_attester_key' in df_new.columns:
+                df_new = df_new.drop(columns=['_attester_key'])
+
             if df_new.empty == False:
                 ## if column chain_id starts with 'eip155' then do checksum address
                 df_new['address'] = df_new.apply(

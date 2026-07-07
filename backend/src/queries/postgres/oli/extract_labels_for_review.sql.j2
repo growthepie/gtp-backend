@@ -1,7 +1,8 @@
 {#
     Get all attestations from external attesters that have a 'contract_name', 'owner_project' or 'usage_category' tag assigned to a label. Labels are reviewed and reattested via airtable.
     - Filters out tag_ids that are not contract_name, owner_project, usage_category
-    - Filters out attestations made by growthepie.attest or growthepie.automatic
+    - Filters out attestations made by growthepie.attest or automated growthepie labelers
+    - Filters out external attestations already superseded by a newer growthepie.attest label
 
     Parameters:
     - date: Only get attestations after this date (default: '2020-01-01')
@@ -18,6 +19,7 @@ WITH filtered_labels AS (
     attester != decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
     AND attester != decode('C139d50144Ee873c8577d682628E045dECe6040E', 'hex') -- growthepie.automatic
     AND attester != decode('aDbf2b56995b57525Aa9a45df19091a2C5a2A970', 'hex') -- OLI_automated_labeler
+    AND attester != decode('ab81887E560e7C7b5993cE45D1c584d7FC22e898', 'hex') -- OLI_automated_labeler_trading
     AND chain_id IN (SELECT caip2 FROM sys_main_conf)
     AND tag_id IN ('contract_name', 'owner_project', 'usage_category')
     AND "time" > '{{ date }}'::timestamp
@@ -28,6 +30,7 @@ pivoted_data AS (
     (array_agg(address))[1] AS address,
     (array_agg(attester))[1] AS attester,
     MAX(chain_id) AS chain_id,
+    MAX("time") AS attestation_time,
     MAX(CASE WHEN tag_id = 'contract_name' THEN tag_value END) AS contract_name,
     MAX(CASE WHEN tag_id = 'owner_project' THEN tag_value END) AS owner_project,
     MAX(CASE WHEN tag_id = 'usage_category' THEN tag_value END) AS usage_category
@@ -38,4 +41,13 @@ pivoted_data AS (
 )
 
 SELECT * FROM pivoted_data
-WHERE owner_project IS NOT NULL;
+WHERE owner_project IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.labels gtp_labels
+    WHERE gtp_labels.address = pivoted_data.address
+      AND gtp_labels.chain_id = pivoted_data.chain_id
+      AND gtp_labels.attester = decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
+      AND gtp_labels.tag_id = 'owner_project'
+      AND gtp_labels."time" >= pivoted_data.attestation_time
+  );
