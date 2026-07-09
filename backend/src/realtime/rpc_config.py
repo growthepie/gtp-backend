@@ -151,6 +151,14 @@ rpc_config = {
         "calc_fees": False,
     },
     
+    "robinhood": {
+        "name": "Robinhood",
+        "processors": "evm",
+        "stack": "nitro",
+        "sleeper": 2,
+        "calc_fees": True,
+    },
+    
     # ZK Stack chains
     "zksync_era": {
         "name": "ZKsync Era",
