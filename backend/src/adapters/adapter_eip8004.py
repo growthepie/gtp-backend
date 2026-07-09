@@ -73,14 +73,25 @@ class EIP8004Adapter(AbstractAdapter):
                     contract_address = self.address_reputation
                     contract_abi = self.abi_reputation
 
-                # loop through all days, extract logs, aggregate and merge into df_all
-                for date in list(block_date_map)[1:]:
+                # loop through available day boundaries, extract logs, aggregate and merge into df_all
+                block_dates = list(block_date_map)
+                for i, date in enumerate(block_dates[1:], start=1):
                     
                     if pd.Timestamp(date) >= df_progress_chain[df_progress_chain['event'] == event]['date'].values[0]:
 
                         # extract
+                        next_available_date = block_dates[i - 1]
+                        missing_day_count = (
+                            pd.Timestamp(next_available_date) - pd.Timestamp(date)
+                        ).days - 1
+                        if missing_day_count > 0:
+                            print(
+                                f"-- Missing first_block_of_day boundary for {chain} after {date}; "
+                                f"using next available boundary {next_available_date} "
+                                f"({missing_day_count} skipped day(s))"
+                            )
                         from_block = block_date_map[date]
-                        to_block = block_date_map[(pd.Timestamp(date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')] - 1
+                        to_block = block_date_map[next_available_date] - 1
                         daily_logs = self.extract_logs(chain, rpc_map, contract_abi, contract_address, event, from_block, to_block)
                         print(f"-- Extracting {date} starting from block {from_block} to {to_block}")
 
