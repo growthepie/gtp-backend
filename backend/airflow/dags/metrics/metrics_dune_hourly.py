@@ -44,6 +44,11 @@ def etl():
                     'query_id': 6776063,
                     'params': {'hours': 3}
                 },
+                {
+                    'name': 'robinhood_fundamentals_hourly',
+                    'query_id': 7922085,
+                    'params': {'hours': 3}
+                },
             ],
             'prepare_df': 'prepare_df_metric_hourly',
             'load_type': 'fact_kpis_granular'
@@ -277,6 +282,79 @@ def etl():
         df_contract_aa['origin_key'] = 'polygon_pos'
         df_contract_aa.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
         db_connector.upsert_table('fact_active_addresses_contract_hourly', df_contract_aa)
+
+    @task()
+    def run_robinhood_contract_level_hourly():
+        import os
+        from src.db_connector import DbConnector
+        from src.adapters.adapter_dune import AdapterDune
+
+        adapter_params = {
+            'api_key' : os.getenv("DUNE_API")
+        }
+        load_params = {
+            'queries': [
+                {
+                    'name': 'robinhood_contract_level_hourly',
+                    'query_id': 7922162,
+                    'params': {'hours': 3}
+                }
+            ],
+            'prepare_df': 'prepare_df_contract_level_hourly',
+            'load_type': 'blockspace_fact_contract_level_hourly'
+        }
+
+        # initialize adapter
+        db_connector = DbConnector()
+        ad = AdapterDune(adapter_params, db_connector)
+        # extract
+        df = ad.extract(load_params)
+
+        print(f"Loaded {df.shape[0]} rows for contract level.")
+
+        # additional prep steps
+        df['origin_key'] = 'robinhood'
+        df.set_index(['address', 'hour', 'origin_key'], inplace=True)
+
+        # load
+        ad.load(df)
+
+    @task()
+    def run_robinhood_contract_aa_hourly():
+        import os
+        from src.db_connector import DbConnector
+        from src.adapters.adapter_dune import AdapterDune
+
+        adapter_params = {
+            'api_key' : os.getenv("DUNE_API")
+        }
+        load_params = {
+            'queries': [
+                {
+                    'name': 'robinhood_aa',
+                    'query_id': 7922169,
+                    'params': {'hours': 3}
+                }
+            ],
+            'prepare_df': 'prepare_df_contract_level_aa_hourly',
+            'load_type': 'CUSTOM'
+        }
+
+        # initialize adapter
+        db_connector = DbConnector()
+        ad = AdapterDune(adapter_params, db_connector)
+        # extract
+        df = ad.extract(load_params)
+
+        print(f"Loaded {df.shape[0]} rows for robinhood active addresses on contract level.")
+
+        # prepare for fact_active_addresses_contract
+        df_contract_aa = df.copy()
+        df_contract_aa = df_contract_aa[df_contract_aa.address != '<nil>']
+
+        df_contract_aa['origin_key'] = 'robinhood'
+        df_contract_aa.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
+        db_connector.upsert_table('fact_active_addresses_contract_hourly', df_contract_aa)
         
     run_fundamentals_hourly()
     
@@ -288,5 +366,8 @@ def etl():
     
     run_polygon_pos_contract_level_hourly()
     run_polygon_contract_aa_hourly()
+
+    run_robinhood_contract_level_hourly()
+    run_robinhood_contract_aa_hourly()
     
 etl()

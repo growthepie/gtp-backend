@@ -1031,7 +1031,7 @@ class JsonGen():
         streaks_today_dict = {}
 
         for chain in self.main_config:
-            if chain.api_in_main and chain.origin_key not in ['loopring', 'megaeth', 'polygon_pos']:
+            if chain.api_in_main and chain.origin_key not in ['loopring', 'megaeth', 'polygon_pos', 'robinhood']:
                 params = {'origin_key': chain.origin_key, 'custom_gas': chain.origin_key in ['mantle', 'metis', 'gravity', 'plume', 'celo']}
                 df = execute_jinja_query(self.db_connector, "api/select_streak_today.sql.j2", params, return_df=True)
                 

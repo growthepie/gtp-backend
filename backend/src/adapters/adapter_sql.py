@@ -299,7 +299,7 @@ class AdapterSQL(AbstractAdapter):
             else:
                 days = days
                 
-            if chain in ['megaeth', 'polygon_pos', 'starknet', 'ronin']:
+            if chain in ['megaeth', 'polygon_pos', 'starknet', 'ronin', 'robinhood']:
                 if chain == 'starknet':
                     ## determin total usage
                     print(f"...aggregating total usage for starknet and last {days} days...")
@@ -391,7 +391,7 @@ class AdapterSQL(AbstractAdapter):
                 days = int(days)
             
             ## Starknet data isn't stored in fact_active_addresses as we only keep EVM addresses in here
-            if origin_key not in ['starknet', 'megaeth', 'polygon_pos', 'ronin']:
+            if origin_key not in ['starknet', 'megaeth', 'polygon_pos', 'ronin', 'robinhood']:
                 print(f"...aggregating + inserting active addresses data for {origin_key} and last {days} days and days_end set to {days_end}...")
                 self.db_connector.aggregate_unique_addresses(origin_key, days, days_end)
 
