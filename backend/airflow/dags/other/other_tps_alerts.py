@@ -142,7 +142,7 @@ def run_dag():
             #send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message, image_path=f"generated_images/{filename}")
             send_discord_message(message, os.getenv("GTP_AI_WEBHOOK_URL"), image_paths=f"generated_images/{filename}")
             
-        print("🔌 Connecting to Redis...")
+        print(f"🔌 Connecting to Redis on host {REDIS_HOST}:{REDIS_PORT}...")
         r = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
