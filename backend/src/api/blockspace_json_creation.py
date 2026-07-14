@@ -1037,11 +1037,11 @@ class BlockspaceJSONCreation():
 
         comparison_dict = fix_dict_nan(comparison_dict, f'blockspace/category_comparison', False)
 
-        if self.s3_bucket == None:
-            self.save_to_json(comparison_dict, f'blockspace/category_comparison')
-        else:
-            upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/blockspace/category_comparison', comparison_dict, self.cf_distribution_id)
-        print(f'-- DONE -- Blockspace export for category_comparison')
+        # if self.s3_bucket == None:
+        #     self.save_to_json(comparison_dict, f'blockspace/category_comparison')
+        # else:
+        #     upload_json_to_cf_s3(self.s3_bucket, f'{self.api_version}/blockspace/category_comparison', comparison_dict, self.cf_distribution_id)
+        # print(f'-- DONE -- Blockspace export for category_comparison')
 
         ## also write the same content split into one file per main category (+ an index)
         self._write_blockspace_comparison_split(comparison_dict)

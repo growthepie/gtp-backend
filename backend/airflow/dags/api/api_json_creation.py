@@ -123,14 +123,14 @@ def etl():
 
         blockspace_json_creator.create_blockspace_overview_json()
 
-    # @task()
-    # def run_create_blockspace_category_comparison():
-    #     from src.db_connector import DbConnector
-    #     from src.api.blockspace_json_creation import BlockspaceJSONCreation
-    #     db_connector = DbConnector()
-    #     blockspace_json_creator = BlockspaceJSONCreation(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, api_version)
+    @task()
+    def run_create_blockspace_category_comparison():
+        from src.db_connector import DbConnector
+        from src.api.blockspace_json_creation import BlockspaceJSONCreation
+        db_connector = DbConnector()
+        blockspace_json_creator = BlockspaceJSONCreation(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, api_version)
 
-    #     blockspace_json_creator.create_blockspace_comparison_json()    
+        blockspace_json_creator.create_blockspace_comparison_json()    
 
     @task()
     def run_create_chain_blockspace():
@@ -161,7 +161,7 @@ def etl():
 
     ## Blockspace
     run_create_blockspace_overview()
-    # run_create_blockspace_category_comparison()
+    run_create_blockspace_category_comparison()
     run_create_chain_blockspace()
 
     ## App Level
