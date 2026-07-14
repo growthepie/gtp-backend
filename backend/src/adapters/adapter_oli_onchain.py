@@ -51,7 +51,7 @@ class AdapterOLIOnchain(AbstractAdapter):
 
         # get block range if 'latest', 'last_run_block' or negative number
         if extract_params.get('to_block', None) == 'latest':
-            extract_params['to_block'] = self.w3.eth.block_number
+            extract_params['to_block'] = self.w3.eth.block_number - 3
         if extract_params.get('from_block', None) == 'last_run_block':
             extract_params['from_block'] = self.get_last_run_block(self.schema_info)
             if extract_params['to_block'] <= extract_params['from_block']:
