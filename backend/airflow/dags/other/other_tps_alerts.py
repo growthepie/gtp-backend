@@ -207,5 +207,213 @@ def run_dag():
         print("👋 Exiting monitor loop.")
         r.close()
 
+    @task()
+    def run_tps_chains():
+        import os
+        import time
+        import json
+        import signal
+        import sys
+        import redis
+        from src.misc.helper_functions import send_discord_message
+
+        try:
+            from src.realtime.rpc_config import rpc_config
+        except Exception as e:
+            print(f"⚠️ Failed to load rpc_config for chain display names: {e}")
+            rpc_config = {}
+
+        start_time = time.time()
+
+        # Redis constants
+        REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+        REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+        REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+        REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+
+        REDIS_CHAIN_ATH_HISTORY_PATTERN = "chain:*:tps:ath_history"
+        REDIS_CHAIN_ATH_HISTORY_PREFIX = "chain:"
+        REDIS_CHAIN_ATH_HISTORY_SUFFIX = ":tps:ath_history"
+        CHECK_INTERVAL_SEC = 5
+        COOLDOWN_AFTER_ALERTS_SEC = 60
+        MONITOR_RUNTIME_SEC = 29 * 60
+        MAX_CHAIN_ALERTS_PER_LOOP = 10
+
+        # Graceful exit flag
+        running = True
+        def handle_exit(signum, frame):
+            nonlocal running
+            print("\n🛑 Received shutdown signal. Exiting gracefully...")
+            running = False
+
+        signal.signal(signal.SIGINT, handle_exit)
+        signal.signal(signal.SIGTERM, handle_exit)
+
+        def decode_value(raw_val):
+            if isinstance(raw_val, bytes):
+                return raw_val.decode("utf-8")
+            return raw_val
+
+        def decode_payload(raw_val):
+            try:
+                return json.loads(decode_value(raw_val))
+            except Exception as e:
+                print(f"⚠️ Failed to decode JSON: {e}")
+                return None
+
+        def extract_chain_name(history_key):
+            history_key = decode_value(history_key)
+            if not history_key.startswith(REDIS_CHAIN_ATH_HISTORY_PREFIX):
+                return None
+            if not history_key.endswith(REDIS_CHAIN_ATH_HISTORY_SUFFIX):
+                return None
+            return history_key[
+                len(REDIS_CHAIN_ATH_HISTORY_PREFIX):-len(REDIS_CHAIN_ATH_HISTORY_SUFFIX)
+            ]
+
+        def chain_display_name(chain_name):
+            return rpc_config.get(chain_name, {}).get("name", chain_name.replace("_", " ").title())
+
+        def chain_url_slug(chain_name):
+            if chain_name == "imx":
+                return "immutable-x"
+            if chain_name == "rhino":
+                return "rhino-fi"
+            return chain_name.replace("_", "-")
+
+        def get_chain_history_keys(r):
+            keys = []
+            for history_key in r.scan_iter(match=REDIS_CHAIN_ATH_HISTORY_PATTERN):
+                chain_name = extract_chain_name(history_key)
+                if chain_name:
+                    keys.append((chain_name, decode_value(history_key)))
+            return sorted(keys)
+
+        def get_latest_entry(r, redis_key):
+            """Return latest zset entry as (payload_dict, score) or (None, None)."""
+            latest = r.zrevrange(redis_key, 0, 0, withscores=True)
+            if not latest:
+                return None, None
+            raw_val, score = latest[0]
+            payload = decode_payload(raw_val)
+            if payload is None:
+                return None, None
+            return payload, score
+
+        def get_latest_unalerted_entry(r, redis_key, last_alerted_score):
+            """Return latest ATH event with score greater than last alerted score."""
+            if last_alerted_score is None:
+                return None, None
+            min_score = "-inf" if last_alerted_score == float("-inf") else f"({last_alerted_score}"
+            entries = r.zrangebyscore(
+                redis_key,
+                min_score,
+                "+inf",
+                withscores=True,
+            )
+            if not entries:
+                return None, None
+            raw_val, score = entries[-1]
+            payload = decode_payload(raw_val)
+            if payload is None:
+                return None, None
+            return payload, score
+
+        def get_last_alerted_score(r, chain_name):
+            raw_score = r.get(f"chain:{chain_name}:tps:ath_alert:last_score")
+            if raw_score is None:
+                return None
+            try:
+                return float(decode_value(raw_score))
+            except (TypeError, ValueError):
+                print(f"⚠️ Invalid last alerted score for {chain_name}: '{raw_score}', resetting alert baseline.")
+                return None
+
+        def set_last_alerted_score(r, chain_name, score):
+            r.set(f"chain:{chain_name}:tps:ath_alert:last_score", str(score))
+
+        def on_new_chain_tps_high(chain_name, new_tps, payload):
+            ts = str(payload.get("timestamp") or payload.get("timestamp_ms"))
+            ts = ts.split(".")[0]
+            block_number = payload.get("block_number")
+            display_name = chain_display_name(chain_name)
+            url = f"https://www.growthepie.com/chains/{chain_url_slug(chain_name)}"
+
+            message = [
+                f"🥧 **New all-time high in {display_name} TPS:** `{new_tps:.2f}`",
+                f"*(at {ts} UTC)*",
+            ]
+            if block_number is not None:
+                message.append(f"Block: `{block_number}`")
+            message.append(f"[View on growthepie.com]({url})")
+
+            send_discord_message("\n".join(message), os.getenv("GTP_AI_WEBHOOK_URL"))
+
+        print(f"🔌 Connecting to Redis on host {REDIS_HOST}:{REDIS_PORT}...")
+        r = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+            password=REDIS_PASSWORD,
+            decode_responses=False
+        )
+        try:
+            r.ping()
+        except redis.exceptions.ConnectionError as e:
+            print(f"❌ Failed to connect to Redis: {e}")
+            sys.exit(1)
+        print(f"✅ Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+
+        while running:
+            alert_count = 0
+            history_keys = get_chain_history_keys(r)
+            if not history_keys:
+                print(f"ℹ️ No chain ATH history keys found for pattern '{REDIS_CHAIN_ATH_HISTORY_PATTERN}'")
+
+            for chain_name, history_key in history_keys:
+                last_alerted_score = get_last_alerted_score(r, chain_name)
+                if last_alerted_score is None:
+                    _, score = get_latest_entry(r, history_key)
+                    if score is not None:
+                        set_last_alerted_score(r, chain_name, score)
+                        print(f"🔧 Initial alert baseline for {chain_name} set to Redis score {score}")
+                    continue
+
+                payload, score = get_latest_unalerted_entry(r, history_key, last_alerted_score)
+                if not payload:
+                    continue
+
+                try:
+                    current_tps = float(payload.get("tps", float("-inf")))
+                except (TypeError, ValueError):
+                    current_tps = float("-inf")
+                if not current_tps > 0:
+                    print(f"⚠️ Invalid chain TPS ATH payload for {chain_name}; skipping alert.")
+                    set_last_alerted_score(r, chain_name, score)
+                    continue
+
+                on_new_chain_tps_high(chain_name, current_tps, payload)
+                set_last_alerted_score(r, chain_name, score)
+                alert_count += 1
+
+                if alert_count >= MAX_CHAIN_ALERTS_PER_LOOP:
+                    print(f"⏳ Sent {alert_count} chain TPS ATH alerts; pausing before sending more.")
+                    break
+
+            if alert_count:
+                time.sleep(COOLDOWN_AFTER_ALERTS_SEC)
+                continue
+
+            if start_time + MONITOR_RUNTIME_SEC < time.time():
+                print("⏰ Approaching task timeout, exiting loop to allow for graceful restart.")
+                break
+
+            print(f"ℹ️ No unalerted chain TPS highs across {len(history_keys)} chains.")
+            time.sleep(CHECK_INTERVAL_SEC)
+
+        print("👋 Exiting monitor loop.")
+        r.close()
+
     run_tps_global()
+    run_tps_chains()
 run_dag()
