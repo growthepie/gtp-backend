@@ -8,7 +8,7 @@ from src.misc.airflow_utils import alert_via_webhook
         'retries' : 1,
         'email_on_failure': False,
         'retry_delay' : timedelta(seconds=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='lorenz')
+        'on_failure_callback': alert_via_webhook
     },
     dag_id='utility_dummy',
     description='This is a dummy DAG that is supposed to fail.',

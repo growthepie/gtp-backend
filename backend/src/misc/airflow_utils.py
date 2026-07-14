@@ -11,14 +11,14 @@ USER_IDS = {
     'martin': '1139314584671490089',
 }
 
-def alert_via_webhook(context):
+def alert_via_webhook(context, user=None):
     dag_run = context.get('dag_run')
     task_instance = context.get('task_instance')
     exception = context.get('exception')
     webhook_url = Variable.get("DISCORD_ALERTS")
 
     dag = context.get('dag')
-    owner = dag.default_args.get('owner', 'mseidl') if dag and dag.default_args else 'mseidl'
+    owner = user or (dag.default_args.get('owner', 'mseidl') if dag and dag.default_args else 'mseidl')
     user_id = USER_IDS.get(owner, USER_IDS['mseidl'])
 
     message = f"<@{user_id}> -- A failure occurred in {dag_run.dag_id} on task {task_instance.task_id}. Might just be a transient issue -- Exception: {exception}"

@@ -9,7 +9,7 @@ from src.misc.airflow_utils import alert_via_webhook
         'retries': 2,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=15),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='lorenz')
+        'on_failure_callback': alert_via_webhook
     },
     dag_id='oli_website_analytics',
     description='Create json files for the OLI website analytics page',

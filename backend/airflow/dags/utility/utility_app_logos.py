@@ -8,7 +8,7 @@ from src.misc.airflow_utils import alert_via_webhook
         'retries' : 1,
         'email_on_failure': False,
         'retry_delay' : timedelta(seconds=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='mseidl')
+        'on_failure_callback': alert_via_webhook
     },
     dag_id='utility_app_logos',
     description='This DAG is supposed to download app logos from the github repo and upload them to s3.',

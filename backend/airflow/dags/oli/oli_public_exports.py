@@ -316,7 +316,7 @@ def export_table(config_key: str) -> int:
         "retries": 2,
         "email_on_failure": False,
         "retry_delay": timedelta(minutes=5),
-        "on_failure_callback": lambda context: alert_via_webhook(context, user="lorenz"),
+        "on_failure_callback": alert_via_webhook,
     },
     dag_id="oli_public_exports",
     description="Export new OLI labels and attestations to public BigQuery tables and GCS parquet files.",

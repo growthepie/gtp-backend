@@ -11,7 +11,7 @@ CET = timezone("Europe/Paris")
         'retries': 2,
         'email_on_failure': False,
         'retry_delay': timedelta(minutes=5),
-        'on_failure_callback': lambda context: alert_via_webhook(context, user='mseidl')
+        'on_failure_callback': alert_via_webhook
     },
     dag_id='other_highlights_bot',
     description='Send highlights from growthepie.com to Discord and Telegram',
