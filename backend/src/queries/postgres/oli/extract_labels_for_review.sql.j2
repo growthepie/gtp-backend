@@ -22,6 +22,7 @@ WITH filtered_labels AS (
     AND attester != decode('ab81887E560e7C7b5993cE45D1c584d7FC22e898', 'hex') -- OLI_automated_labeler_trading
     AND chain_id IN (SELECT caip2 FROM sys_main_conf)
     AND tag_id IN ('contract_name', 'owner_project', 'usage_category')
+    AND NULLIF(BTRIM(tag_value), '') IS NOT NULL
     AND "time" > '{{ date }}'::timestamp
 ),
 
