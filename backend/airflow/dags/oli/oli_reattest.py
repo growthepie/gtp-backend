@@ -118,17 +118,18 @@ def etl():
                 df_new = df_new.rename(columns={'chain_id': 'origin_key'})
                 
                 # catch errors and log them in the error column (for owner_project and usage_category)
-                df_new['error'] = None
+                df_new['error'] = ''
                 df_new['error'] = df_new.apply(
-                    lambda row: (row['error'] or '') + f" failed owner_project: '{row['owner_project'][0]}'" 
-                    if row['owner_project'][0] is not None and not row['owner_project'][0].startswith('rec') else row['error'], axis=1
+                    lambda row: row['error'] + f" failed owner_project: '{row['owner_project'][0]}'"
+                    if isinstance(row['owner_project'][0], str) and not row['owner_project'][0].startswith('rec') else row['error'], axis=1
                 )
                 df_new['error'] = df_new.apply(
-                    lambda row: (row['error'] or '') + f" failed usage_category: '{row['usage_category'][0]}'" 
-                    if row['usage_category'][0] is not None and not row['usage_category'][0].startswith('rec') else row['error'], axis=1
+                    lambda row: row['error'] + f" failed usage_category: '{row['usage_category'][0]}'"
+                    if isinstance(row['usage_category'][0], str) and not row['usage_category'][0].startswith('rec') else row['error'], axis=1
                 )
-                df_new['usage_category'] = df_new['usage_category'].apply(lambda x: x if x[0] is not None and x[0].startswith('rec') else [])
-                df_new['owner_project'] = df_new['owner_project'].apply(lambda x: x if x[0] is not None and x[0].startswith('rec') else [])
+                df_new['error'] = df_new['error'].apply(lambda x: x.strip() or None)
+                df_new['usage_category'] = df_new['usage_category'].apply(lambda x: x if isinstance(x[0], str) and x[0].startswith('rec') else [])
+                df_new['owner_project'] = df_new['owner_project'].apply(lambda x: x if isinstance(x[0], str) and x[0].startswith('rec') else [])
                 
                 # write to airtable df
                 at.push_to_airtable(table, df_new)

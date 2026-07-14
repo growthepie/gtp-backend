@@ -2,7 +2,7 @@
     Get all attestations from external attesters that have a 'contract_name', 'owner_project' or 'usage_category' tag assigned to a label. Labels are reviewed and reattested via airtable.
     - Filters out tag_ids that are not contract_name, owner_project, usage_category
     - Filters out attestations made by growthepie.attest or automated growthepie labelers
-    - Filters out external attestations already superseded by a newer growthepie.attest label
+    - Filters out tag values already superseded by a newer growthepie.attest label
 
     Parameters:
     - date: Only get attestations after this date (default: '2020-01-01')
@@ -38,16 +38,58 @@ pivoted_data AS (
     filtered_labels
   GROUP BY 
     uid
+),
+
+review_candidates AS (
+  SELECT
+    address,
+    attester,
+    chain_id,
+    attestation_time,
+    CASE
+      WHEN contract_name IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.labels gtp_labels
+          WHERE gtp_labels.address = pivoted_data.address
+            AND gtp_labels.chain_id = pivoted_data.chain_id
+            AND gtp_labels.attester = decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
+            AND gtp_labels.tag_id = 'contract_name'
+            AND gtp_labels."time" >= pivoted_data.attestation_time
+        )
+      THEN contract_name
+    END AS contract_name,
+    CASE
+      WHEN owner_project IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.labels gtp_labels
+          WHERE gtp_labels.address = pivoted_data.address
+            AND gtp_labels.chain_id = pivoted_data.chain_id
+            AND gtp_labels.attester = decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
+            AND gtp_labels.tag_id = 'owner_project'
+            AND gtp_labels."time" >= pivoted_data.attestation_time
+        )
+      THEN owner_project
+    END AS owner_project,
+    CASE
+      WHEN usage_category IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.labels gtp_labels
+          WHERE gtp_labels.address = pivoted_data.address
+            AND gtp_labels.chain_id = pivoted_data.chain_id
+            AND gtp_labels.attester = decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
+            AND gtp_labels.tag_id = 'usage_category'
+            AND gtp_labels."time" >= pivoted_data.attestation_time
+        )
+      THEN usage_category
+    END AS usage_category
+  FROM
+    pivoted_data
 )
 
-SELECT * FROM pivoted_data
-WHERE owner_project IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1
-    FROM public.labels gtp_labels
-    WHERE gtp_labels.address = pivoted_data.address
-      AND gtp_labels.chain_id = pivoted_data.chain_id
-      AND gtp_labels.attester = decode('A725646C05E6BB813D98C5ABB4E72DF4BCF00B56', 'hex') -- growthepie.attest
-      AND gtp_labels.tag_id = 'owner_project'
-      AND gtp_labels."time" >= pivoted_data.attestation_time
-  );
+SELECT * FROM review_candidates
+WHERE contract_name IS NOT NULL
+  OR owner_project IS NOT NULL
+  OR usage_category IS NOT NULL;
