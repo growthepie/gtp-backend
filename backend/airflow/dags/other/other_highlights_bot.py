@@ -28,7 +28,7 @@ def highlights_bot():
         from src.db_connector import DbConnector
         from src.misc.jinja_helper import execute_jinja_query
         from src.config import gtp_metrics_new
-        from src.misc.helper_functions import highlights_prep, send_telegram_message, generate_screenshot
+        from src.misc.helper_functions import highlights_prep, send_telegram_message, generate_fundamentals_chart_screenshot, chain_origin_key_to_url_slug
         from src.main_config import get_main_config
 
         db_connector = DbConnector()
@@ -69,26 +69,15 @@ def highlights_bot():
                     )
                     
                     if highlight_type != 'growth_1':
-                        ## Take screenshot of chart
-                        if origin_key == 'ethereum_ecosystem':
-                            chains_url = ''
-                            for chain in main_config:
-                                if chain.api_in_main and chain.api_deployment_flag == 'PROD' and metric_id not in chain.api_exclude_metrics:
-                                    chains_url += f"{chain.origin_key}%2C"
-                            chains_url = chains_url[:-3]  # remove last %2C   
-                        else:
-                            chains_url = origin_key
-                            
-                        if metric_conf['category'] in ['value-locked', 'market'] or metric_id in ['throughput', 'fully_diluted_valuation']:
-                            timespan = 'max'
-                        else:
-                            timespan = '180d'
-                        
-
-                        url = f"https://www.growthepie.com/embed/fundamentals/{metric_fe}?showUsd=true&theme=dark&timespan={timespan}&scale=stacked&interval=daily&showMainnet=true&chains={chains_url}&zoomed=false"
+                        ## Screenshot the metric chart card (the /embed/fundamentals/... pages
+                        # were removed from the frontend). For a specific chain we reconcile the
+                        # chart to show only that chain; the ecosystem aggregate keeps the default
+                        # multi-chain view. The new page ignores the old query params, so drop them.
+                        chain_slug = None if origin_key == 'ethereum_ecosystem' else chain_origin_key_to_url_slug(origin_key)
+                        url = f"https://www.growthepie.com/fundamentals/{metric_fe}"
                         print(f"🌐 Chart URL: {url}")
                         filename = f"{date}_{metric_key}.png"
-                        generate_screenshot(url, filename, height=800, width=1400)
+                        generate_fundamentals_chart_screenshot(url, filename, chain_slug=chain_slug, height=1000, width=1400, wait_for_timeout=4000)
                         #send_discord_message(message, os.getenv("GTP_AI_WEBHOOK_URL"), image_paths=f"generated_images/{filename}")
                         send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message, image_path=f"generated_images/{filename}")
                     else:
@@ -103,12 +92,12 @@ def highlights_bot():
         from src.db_connector import DbConnector
         from src.misc.jinja_helper import execute_jinja_query
         from src.config import gtp_metrics_new
-        from src.misc.helper_functions import highlights_prep, send_discord_message, generate_screenshot
+        from src.misc.helper_functions import highlights_prep, send_discord_message, generate_fundamentals_chart_screenshot, chain_origin_key_to_url_slug
         from src.main_config import get_main_config
 
         db_connector = DbConnector()
         main_config = get_main_config()
-        
+
         for chain in main_config:
             origin_key = chain.origin_key
             name = chain.name
@@ -143,26 +132,15 @@ def highlights_bot():
                             )
                             
                             if highlight_type != 'growth_1':
-                                ## Take screenshot of chart
-                                if origin_key == 'ethereum_ecosystem':
-                                    chains_url = ''
-                                    for chain in main_config:
-                                        #if chain.api_in_main and chain.api_deployment_flag == 'PROD' and metric_id not in chain.api_exclude_metrics:
-                                        chains_url += f"{chain.origin_key}%2C"
-                                    chains_url = chains_url[:-3]  # remove last %2C   
-                                else:
-                                    chains_url = origin_key
-                                    
-                                if metric_conf['category'] in ['value-locked', 'market'] or metric_id in ['throughput', 'fully_diluted_valuation']:
-                                    timespan = 'max'
-                                else:
-                                    timespan = '180d'
-                                
-
-                                url = f"https://www.growthepie.com/embed/fundamentals/{metric_fe}?showUsd=true&theme=dark&timespan={timespan}&scale=stacked&interval=daily&showMainnet=true&chains={chains_url}&zoomed=false"
+                                ## Screenshot the metric chart card (the /embed/fundamentals/...
+                                # pages were removed from the frontend). Reconcile the chart to show
+                                # only the chain that produced the highlight, then clip to the card.
+                                # The new page ignores the old query params, so drop them.
+                                chain_slug = chain_origin_key_to_url_slug(origin_key)
+                                url = f"https://www.growthepie.com/fundamentals/{metric_fe}"
                                 print(f"🌐 Chart URL: {url}")
                                 filename = f"{date}_{metric_key}.png"
-                                generate_screenshot(url, filename, height=800, width=1400)
+                                generate_fundamentals_chart_screenshot(url, filename, chain_slug=chain_slug, height=1000, width=1400, wait_for_timeout=4000)
                                 send_discord_message(message, os.getenv("GTP_AI_WEBHOOK_URL"), image_paths=f"generated_images/{filename}")
                                 #send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message, image_path=f"generated_images/{filename}")
                             else:

@@ -519,6 +519,136 @@ def generate_screenshot(
         browser.close()
         print(f"✅ Screenshot saved: {screenshot_path}")
 
+
+def chain_origin_key_to_url_slug(origin_key: str) -> str:
+    """Map a GTP origin_key to its growthepie frontend URL slug (used in /chains/<slug>
+    links). Mirrors chain_url_slug() in other_tps_alerts.py — keep the two in sync."""
+    if origin_key == "imx":
+        return "immutable-x"
+    if origin_key == "rhino":
+        return "rhino-fi"
+    return origin_key.replace("_", "-")
+
+
+def generate_fundamentals_chart_screenshot(
+    url: str,
+    filename: str,
+    chain_slug: str = None,
+    height: int = 1000,
+    width: int = 1400,
+    wait_for_timeout: int = 4000,
+    card_selector: str = 'div[class*="rounded-[18px]"]',
+):
+    """
+    Screenshot a growthepie /fundamentals/<metric> chart card.
+
+    The old /embed/fundamentals/... pages were removed from the frontend, so we load
+    the regular metric page and clip the screenshot to the chart card (card_selector).
+
+    If chain_slug is given, the chain-selection table is reconciled so that ONLY that
+    chain is shown in the chart before the screenshot (select the target chain, then
+    deselect every other chain, re-reading state after each click since the list
+    reorders). This is best-effort: if the chain isn't listed for the metric, the
+    default multi-chain view is captured instead. Pass chain_slug=None (e.g. for the
+    ecosystem aggregate) to keep the default view.
+    """
+    from playwright.sync_api import sync_playwright
+
+    # Runs in the page: reads which chains are currently "shown in chart" (via DOM order
+    # relative to the "NOT SHOWING IN CHART" divider — scroll-independent) and returns the
+    # next toggle to click to converge on "only <target> selected", scrolling it into view.
+    js_reconcile_step = r"""
+    (target) => {
+      const card = document.querySelector('div[class*="rounded-[18px]"]');
+      if (!card) return { error: 'no card' };
+      const rowOf = (slug) => {
+        const links = [...card.querySelectorAll('a[href="/chains/' + slug + '"]')];
+        if (!links.length) return null;
+        let row = links[0];
+        for (let i=0;i<8&&row;i++){ const r=row.getBoundingClientRect();
+          if (r.width>380&&r.width<520&&r.height>=24&&r.height<=48) break; row=row.parentElement; }
+        return row;
+      };
+      const divider = [...card.querySelectorAll('*')]
+        .find(e => e.children.length===0 && /NOT SHOWING IN CHART/i.test(e.textContent));
+      const links = [...card.querySelectorAll('a[href^="/chains/"]')];
+      const seen = new Set(); const selected = [];
+      links.forEach(a => {
+        const slug = a.getAttribute('href').split('/').pop();
+        if (seen.has(slug)) return; seen.add(slug);
+        let row = a;
+        for (let i=0;i<8&&row;i++){ const r=row.getBoundingClientRect();
+          if (r.width>380&&r.width<520&&r.height>=24&&r.height<=48) break; row=row.parentElement; }
+        if (!divider) { selected.push(slug); return; }  // no divider => every chain selected
+        const pos = row.compareDocumentPosition(divider);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) selected.push(slug);
+      });
+      if (!seen.has(target)) return { error: 'target not in table', selected };
+      const others = selected.filter(s => s !== target);
+      let slug=null, action=null;
+      if (!selected.includes(target)) { slug=target; action='select'; }
+      else if (others.length) { slug=others[0]; action='deselect'; }
+      else return { done: true, selected };
+      const row = rowOf(slug);
+      if (!row) return { error: 'no row for ' + slug, selected };
+      row.scrollIntoView({ block: 'center' });
+      const r = row.getBoundingClientRect();
+      return { done:false, action, slug, x: Math.round(r.right-9), y: Math.round(r.top + r.height/2), selected };
+    }
+    """
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_viewport_size({"width": width, "height": height})
+
+        print(f"📸 Loading chart: {url}")
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(wait_for_timeout)
+
+        if chain_slug:
+            print(f"🎯 Reconciling chart to only show chain: {chain_slug}")
+            step = None
+            for _ in range(60):
+                step = page.evaluate(js_reconcile_step, chain_slug)
+                if not step or step.get("done"):
+                    break
+                if step.get("error"):
+                    print(f"⚠️ Chain selection skipped ({step['error']}); using default chart view.")
+                    break
+                page.mouse.click(step["x"], step["y"])
+                page.wait_for_timeout(350)  # let React re-render / list reorder
+            else:
+                print("⚠️ Reconcile hit iteration cap; using current chart state.")
+            print(f"✅ Chains shown in chart: {step.get('selected') if step else 'unknown'}")
+
+            # The reconcile scrolls rows into view; reset the chain list to the top so the
+            # selected chain (which pins to the top of the list) is visible in the card image.
+            page.evaluate(r"""() => {
+              const card = document.querySelector('div[class*="rounded-[18px]"]');
+              const link = card && card.querySelector('a[href^="/chains/"]');
+              if (!link) return;
+              let el = link;
+              while (el && el !== card) {
+                const cs = getComputedStyle(el);
+                if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight) { el.scrollTop = 0; break; }
+                el = el.parentElement;
+              }
+            }""")
+            page.wait_for_timeout(300)
+
+        screenshot_path = f"generated_images/{filename}"
+        element = page.query_selector(card_selector)
+        box = element.bounding_box() if element else None
+        if box:
+            page.screenshot(path=screenshot_path, clip=box)
+        else:
+            print(f"⚠️ Card selector '{card_selector}' not found. Taking full-page screenshot.")
+            page.screenshot(path=screenshot_path, full_page=False)
+
+        browser.close()
+        print(f"✅ Screenshot saved: {screenshot_path}")
+
 ## Binance functions
 def date_string_to_unix(date_string: str) -> int:
     dt = datetime.strptime(date_string, '%Y-%m-%d')
