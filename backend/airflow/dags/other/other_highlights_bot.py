@@ -85,10 +85,10 @@ def highlights_bot():
                             timespan = '180d'
                         
 
-                        url = f"https://www.growthepie.com/embed/fundamentals/{metric_fe}?showUsd=true&theme=dark&timespan={timespan}&scale=stacked&interval=daily&showMainnet=true&chains={chains_url}&zoomed=false"
+                        url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true"
                         print(f"🌐 Chart URL: {url}")
                         filename = f"{date}_{metric_key}.png"
-                        generate_screenshot(url, filename, height=800, width=1400)
+                        generate_screenshot(url, filename, width=1400, height=1000, wait_for_timeout=5000, selector=r".rounded-\[18px\].bg-color-bg-default")
                         #send_discord_message(message, os.getenv("GTP_AI_WEBHOOK_URL"), image_paths=f"generated_images/{filename}")
                         send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message, image_path=f"generated_images/{filename}")
                     else:
@@ -159,10 +159,10 @@ def highlights_bot():
                                     timespan = '180d'
                                 
 
-                                url = f"https://www.growthepie.com/embed/fundamentals/{metric_fe}?showUsd=true&theme=dark&timespan={timespan}&scale=stacked&interval=daily&showMainnet=true&chains={chains_url}&zoomed=false"
+                                url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true"
                                 print(f"🌐 Chart URL: {url}")
                                 filename = f"{date}_{metric_key}.png"
-                                generate_screenshot(url, filename, height=800, width=1400)
+                                generate_screenshot(url, filename, width=1400, height=1000, wait_for_timeout=5000, selector=r".rounded-\[18px\].bg-color-bg-default")
                                 send_discord_message(message, os.getenv("GTP_AI_WEBHOOK_URL"), image_paths=f"generated_images/{filename}")
                                 #send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message, image_path=f"generated_images/{filename}")
                             else:

@@ -479,6 +479,7 @@ def generate_screenshot(
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.emulate_media(color_scheme="dark")  # site follows system prefers-color-scheme; headless defaults to light
         page.set_viewport_size({"width": width, "height": height})
 
         print(f"📸 Loading chart: {url}")
