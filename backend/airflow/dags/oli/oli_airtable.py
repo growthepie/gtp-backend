@@ -445,7 +445,7 @@ def etl():
         # send alert to discord
         if df.shape[0] > 0:
             print(f"Inactive contracts found: {df['tag_value'].unique().tolist()}")
-            send_discord_message(f"<@874921624720257037> Inactive projects with assigned contracts: {df['tag_value'].unique().tolist()}", os.getenv('DISCORD_CONTRACTS'))
+            send_discord_message(f"<@1139314584671490089> Inactive projects with assigned contracts: {df['tag_value'].unique().tolist()}", os.getenv('DISCORD_CONTRACTS'))
         else:
             print("No inactive projects with contracts assigned found")
 

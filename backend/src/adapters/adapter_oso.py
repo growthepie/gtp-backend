@@ -107,7 +107,7 @@ class AdapterOSO(AbstractAdapter):
         new_projects = df_new_projects['name'].to_list()
         print(f"...{len(new_projects)} projects newly added since the last sync: {new_projects}")
         if len(new_projects) > 0:
-            send_discord_message(f"<@874921624720257037> OSS projects newly ADDED: {new_projects}", self.webhook_url)
+            send_discord_message(f"<@1139314584671490089> OSS projects newly ADDED: {new_projects}", self.webhook_url)
 
         ## set index
         df_oss.set_index('name', inplace=True)
