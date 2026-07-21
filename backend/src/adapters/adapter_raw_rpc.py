@@ -536,33 +536,66 @@ class NodeAdapter(AbstractAdapterRaw):
             end_block (int): The ending block number for backfill.
             batch_size (int): Number of blocks to process per batch.
 
-        Filters out block ranges with no transactions.
+        Filters out transaction-table ranges with no transactions. Ethereum block-header
+        ranges are always processed, because downstream calculations can require headers
+        even when the transaction table is already complete.
         """
-        missing_block_ranges = check_and_record_missing_block_ranges(self.db_connector, self.table_name, start_block, end_block)
-        if not missing_block_ranges:
+        missing_tx_ranges = check_and_record_missing_block_ranges(self.db_connector, self.table_name, start_block, end_block)
+        missing_header_ranges = []
+        if self.chain.lower() == "ethereum":
+            missing_header_ranges = check_and_record_missing_block_ranges(
+                self.db_connector,
+                f"{self.chain.lower()}_blocks",
+                start_block,
+                end_block,
+                block_column="number",
+            )
+
+        if not missing_tx_ranges and not missing_header_ranges:
             print("No missing block ranges found.")
             return
-        print(f"Found {len(missing_block_ranges)} missing block ranges.")
-        print("Filtering out ranges with 0 transactions...")
+        print(f"Found {len(missing_tx_ranges)} missing transaction ranges.")
+        print(f"Found {len(missing_header_ranges)} missing ethereum block-header ranges.")
+        print("Filtering transaction ranges with 0 transactions...")
         filtered_ranges = []
         
-        for start, end in missing_block_ranges:
+        for start, end in missing_tx_ranges:
             has_transactions = self.check_range_has_transactions(start, end)
             if has_transactions:
                 filtered_ranges.append((start, end))
             else:
                 print(f"...skipping empty range {start}-{end}")
 
+        filtered_ranges.extend(missing_header_ranges)
+        filtered_ranges = self.merge_block_ranges(filtered_ranges)
+
         if len(filtered_ranges) == 0:
-            print("No missing block ranges with transactions found.")
+            print("No missing ranges to process after filtering.")
             return
         
-        print(f"After filtering: {len(filtered_ranges)} ranges with transactions to process.")
+        print(f"After filtering: {len(filtered_ranges)} ranges to process.")
         print("Backfilling missing blocks")
         print("Missing block ranges:")
         for start, end in filtered_ranges:
             print(f"{start}-{end}")
         self.process_missing_blocks(filtered_ranges, batch_size)
+
+    @staticmethod
+    def merge_block_ranges(ranges):
+        if not ranges:
+            return []
+
+        sorted_ranges = sorted(ranges)
+        merged = [sorted_ranges[0]]
+
+        for start, end in sorted_ranges[1:]:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end + 1:
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+
+        return merged
             
     def backfill_date_range(self, start_date, end_date, batch_size):
         """

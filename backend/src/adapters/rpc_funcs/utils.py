@@ -6,6 +6,7 @@ import os
 import random
 import time
 import pickle
+import math
 from src.adapters.rpc_funcs.web3 import Web3CC
 from sqlalchemy import text
 from src.main_config import get_main_config 
@@ -18,6 +19,26 @@ import polars as pl
 from src.adapters.rpc_funcs.user_ops_processor import find_UserOps
 
 # ---------------- Utility Functions ---------------------
+def calculate_eth_blob_header_fields(block_number, excess_blob_gas):
+    if block_number >= 24179383:
+        target_blob_gas = 14 * 128 * 1024
+        blob_base_fee_update_fraction = 11684671
+    elif block_number >= 23975778:
+        target_blob_gas = 10 * 128 * 1024
+        blob_base_fee_update_fraction = 8346193
+    elif block_number >= 22431084:
+        target_blob_gas = 6 * 128 * 1024
+        blob_base_fee_update_fraction = 5007716
+    else:
+        target_blob_gas = 3 * 128 * 1024
+        blob_base_fee_update_fraction = 3338477
+
+    blob_base_fee = None
+    if excess_blob_gas is not None:
+        blob_base_fee = int(math.exp(int(excess_blob_gas) / blob_base_fee_update_fraction))
+
+    return target_blob_gas, blob_base_fee_update_fraction, blob_base_fee
+
 def safe_float_conversion(x):
     """
     Safely converts the input value to a float. If the input is a hexadecimal string, 
@@ -1106,6 +1127,10 @@ def extract_block_header(block):
         # Convert unix timestamp to datetime object
         ts = block['timestamp']
         dt_obj = pd.to_datetime(ts, unit='s')
+        target_blob_gas, blob_base_fee_update_fraction, blob_base_fee = calculate_eth_blob_header_fields(
+            block['number'],
+            block.get('excessBlobGas'),
+        )
         
         # Prepare the dictionary matching SQL column names
         data = {
@@ -1124,6 +1149,9 @@ def extract_block_header(block):
             'base_fee_per_gas': block.get('baseFeePerGas'), 
             'excess_blob_gas': block.get('excessBlobGas'),  
             'blob_gas_used': block.get('blobGasUsed'),      
+            'target_blob_gas': target_blob_gas,
+            'blob_base_fee_update_fraction': blob_base_fee_update_fraction,
+            'blob_base_fee': blob_base_fee,
             'txcount': len(block['transactions']),
             # Time fields
             'timestamp': dt_obj,             
@@ -1161,7 +1189,7 @@ def process_and_upload_block_headers(df, db_connector, chain):
             df['nonce'] = df['nonce'].apply(parse_nonce)
         
         # 3. Ensure Numeric Columns fill NaN with None (for SQL NULL)
-        numeric_nullable = ['base_fee_per_gas', 'excess_blob_gas', 'blob_gas_used']
+        numeric_nullable = ['base_fee_per_gas', 'excess_blob_gas', 'blob_gas_used', 'blob_base_fee']
         for col in numeric_nullable:
             if col in df.columns:
                 df[col] = df[col].astype(object).where(df[col].notnull(), None)

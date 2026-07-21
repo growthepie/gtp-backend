@@ -9,7 +9,7 @@ from sqlalchemy import text
 load_dotenv()
 
 # ------------------ Batch Processing Functions ------------------
-def check_and_record_missing_block_ranges(db_connector, table_name, start_block, end_block):
+def check_and_record_missing_block_ranges(db_connector, table_name, start_block, end_block, block_column="block_number"):
     """
     Checks for missing block ranges in the specified table and records them as ranges.
 
@@ -18,14 +18,15 @@ def check_and_record_missing_block_ranges(db_connector, table_name, start_block,
         table_name (str): Name of the table to check for missing blocks.
         start_block (int): The starting block number for the check.
         end_block (int): The ending block number for the check.
+        block_column (str): Name of the block-number column in the table.
 
     Returns:
         list: A list of tuples representing missing block ranges (start_block, end_block).
     """
-    print(f"Checking and recording missing block ranges for table: {table_name}")
+    print(f"Checking and recording missing block ranges for table: {table_name}.{block_column}")
 
     # Ensure start_block is not less than the smallest block in the database
-    smallest_block_query = text(f"SELECT MIN(block_number) AS min_block FROM {table_name};")
+    smallest_block_query = text(f"SELECT MIN({block_column}) AS min_block FROM {table_name};")
     with db_connector.engine.connect() as connection:
         result = connection.execute(smallest_block_query).fetchone()
         db_min_block = result[0] if result[0] is not None else 0
@@ -46,8 +47,8 @@ def check_and_record_missing_block_ranges(db_connector, table_name, start_block,
         )
         SELECT mb.block_number
         FROM missing_blocks mb
-        LEFT JOIN {table_name} t ON mb.block_number = t.block_number
-        WHERE t.block_number IS NULL
+        LEFT JOIN {table_name} t ON mb.block_number = t.{block_column}
+        WHERE t.{block_column} IS NULL
         ORDER BY mb.block_number;
     """)
 
