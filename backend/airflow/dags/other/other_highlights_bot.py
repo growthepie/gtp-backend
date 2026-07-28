@@ -85,7 +85,7 @@ def highlights_bot():
                             timespan = '180d'
                         
 
-                        url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true"
+                        url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true&showRollingAvg=false"
                         print(f"🌐 Chart URL: {url}")
                         filename = f"{date}_{metric_key}.png"
                         generate_screenshot(url, filename, width=1400, height=1000, wait_for_timeout=5000, selector=r".rounded-\[18px\].bg-color-bg-default")
@@ -159,7 +159,7 @@ def highlights_bot():
                                     timespan = '180d'
                                 
 
-                                url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true"
+                                url = f"https://www.growthepie.com/fundamentals/{metric_fe}?chains={chains_url}&hideTable=true&timespan={timespan}&scale=stacked&showUsd=true&showRollingAvg=false"
                                 print(f"🌐 Chart URL: {url}")
                                 filename = f"{date}_{metric_key}.png"
                                 generate_screenshot(url, filename, width=1400, height=1000, wait_for_timeout=5000, selector=r".rounded-\[18px\].bg-color-bg-default")
