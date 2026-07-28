@@ -11,6 +11,8 @@ import eth_utils
 import random
 import numpy as np
 import yaml
+from boto3.s3.transfer import TransferConfig
+from botocore.config import Config
 from openai import OpenAI
 from web3 import Web3
 from playwright.sync_api import sync_playwright
@@ -667,6 +669,7 @@ def empty_cloudfront_cache(distribution_id, path):
 
 def upload_file_to_s3(bucket, path_name, local_path, cf_distribution_id=None, empty_cf_cache=True, destination='aws'):
     # Initialize S3 client
+    transfer_config = None
     if destination == 'aws':
         s3 = boto3.client(
             "s3",
@@ -674,15 +677,35 @@ def upload_file_to_s3(bucket, path_name, local_path, cf_distribution_id=None, em
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
         )
     elif destination == 'hetzner':
+        multipart_chunk_mb = 64
+        max_concurrency = 3
+        read_timeout = 300
+        connect_timeout = 30
+        retry_attempts = 10
+
         s3 = boto3.client(
             "s3",
             endpoint_url="https://fsn1.your-objectstorage.com",  # Hetzner endpoint
             aws_access_key_id=os.getenv("HETZNER_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("HETZNER_SECRET_ACCESS_KEY"),
+            config=Config(
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+                retries={
+                    "max_attempts": retry_attempts,
+                    "mode": "standard",
+                },
+            ),
+        )
+        transfer_config = TransferConfig(
+            multipart_threshold=multipart_chunk_mb * 1024 * 1024,
+            multipart_chunksize=multipart_chunk_mb * 1024 * 1024,
+            max_concurrency=max_concurrency,
         )
         
     # Upload the file to S3
-    s3.upload_file(local_path, bucket, path_name)
+    upload_kwargs = {"Config": transfer_config} if transfer_config else {}
+    s3.upload_file(local_path, bucket, path_name, **upload_kwargs)
 
     print(f'..uploaded to {path_name}')
     if empty_cf_cache:
