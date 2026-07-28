@@ -97,6 +97,8 @@ class AdapterDefillama(AbstractAdapter):
             # For Arbitrum, we need to remove Timeboost (since it already included in the chain REV/revenue)
             if origin_key == 'arbitrum':
                 df = df[~df['protocol'].isin(['Timeboost'])]
+
+            df = df[df['value'] > 0]
             
             df_main = pd.concat([df_main, df], ignore_index=True)
             time.sleep(1)  # Respect API rate limits
