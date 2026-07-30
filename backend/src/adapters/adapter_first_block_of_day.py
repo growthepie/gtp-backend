@@ -27,6 +27,7 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
         super().__init__("First block of day", adapter_params, db_connector)
         self._block_ts_cache: Dict[Tuple[str, int], int] = {}
         self._rpc_get_block_calls = 0
+        self._rpc_candidates_by_chain: Dict[str, List[str]] = {}
 
     def extract(self, extract_params: dict) -> pd.DataFrame:
         origin_keys = extract_params.get("origin_keys")
@@ -94,7 +95,7 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
     def _extract_chain(self, origin_key: str, progress_row: Optional[dict]) -> List[dict]:
         w3 = self._connect_web3(origin_key)
         latest_block = int(w3.eth.block_number)
-        latest_ts = self._get_block_timestamp(origin_key, w3, latest_block)
+        latest_block, latest_ts = self._get_latest_fetchable_block_and_ts(origin_key, w3, latest_block)
         block0_ts = self._get_block_timestamp(origin_key, w3, 0)
 
         # Pull up to current UTC day when it has started from a UTC perspective.
@@ -178,7 +179,15 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
                 print(f"{origin_key} {target_date}: no block found, rpc get_block calls={calls_used}")
                 continue
 
-            block_ts = self._get_block_timestamp(origin_key, w3, block_number)
+            try:
+                block_ts = self._get_block_timestamp(origin_key, w3, block_number)
+            except Exception as exc:
+                calls_used = self._rpc_get_block_calls - calls_before
+                print(
+                    f"{origin_key} {target_date}: failed to validate block {block_number}: {exc}, "
+                    f"rpc get_block calls={calls_used}"
+                )
+                continue
             if block_ts < target_ts or block_ts >= target_ts_next_day:
                 calls_used = self._rpc_get_block_calls - calls_before
                 print(
@@ -191,7 +200,15 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
             # previous block must be before UTC midnight and current block must be inside target day.
             needs_fallback = False
             if int(block_number) > int(chain_start_block):
-                prev_ts = self._get_block_timestamp(origin_key, w3, int(block_number) - 1)
+                try:
+                    prev_ts = self._get_block_timestamp(origin_key, w3, int(block_number) - 1)
+                except Exception as exc:
+                    calls_used = self._rpc_get_block_calls - calls_before
+                    print(
+                        f"{origin_key} {target_date}: failed to validate previous block "
+                        f"{int(block_number) - 1}: {exc}, rpc get_block calls={calls_used}"
+                    )
+                    continue
                 if prev_ts >= target_ts:
                     needs_fallback = True
 
@@ -210,7 +227,15 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
                     print(f"{origin_key} {target_date}: fallback search found no block, rpc get_block calls={calls_used}")
                     continue
 
-                block_ts = self._get_block_timestamp(origin_key, w3, block_number)
+                try:
+                    block_ts = self._get_block_timestamp(origin_key, w3, block_number)
+                except Exception as exc:
+                    calls_used = self._rpc_get_block_calls - calls_before
+                    print(
+                        f"{origin_key} {target_date}: failed to validate fallback block "
+                        f"{block_number}: {exc}, rpc get_block calls={calls_used}"
+                    )
+                    continue
                 if block_ts < target_ts or block_ts >= target_ts_next_day:
                     calls_used = self._rpc_get_block_calls - calls_before
                     print(
@@ -220,7 +245,15 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
                     continue
 
                 if int(block_number) > int(chain_start_block):
-                    prev_ts = self._get_block_timestamp(origin_key, w3, int(block_number) - 1)
+                    try:
+                        prev_ts = self._get_block_timestamp(origin_key, w3, int(block_number) - 1)
+                    except Exception as exc:
+                        calls_used = self._rpc_get_block_calls - calls_before
+                        print(
+                            f"{origin_key} {target_date}: failed to validate previous fallback block "
+                            f"{int(block_number) - 1}: {exc}, rpc get_block calls={calls_used}"
+                        )
+                        continue
                     if prev_ts >= target_ts:
                         calls_used = self._rpc_get_block_calls - calls_before
                         print(
@@ -382,12 +415,22 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
         if low > high:
             return None
 
-        if self._get_block_timestamp(origin_key, w3, high) < target_ts:
+        try:
+            high_ts = self._get_block_timestamp(origin_key, w3, high)
+        except Exception as exc:
+            print(f"{origin_key}: failed to fetch search high block {high}: {exc}")
+            return None
+
+        if high_ts < target_ts:
             return None
 
         while low < high:
             mid = (low + high) // 2
-            mid_ts = self._get_block_timestamp(origin_key, w3, mid)
+            try:
+                mid_ts = self._get_block_timestamp(origin_key, w3, mid)
+            except Exception as exc:
+                print(f"{origin_key}: failed to fetch search mid block {mid}: {exc}")
+                return None
             if mid_ts < target_ts:
                 low = mid + 1
             else:
@@ -429,7 +472,10 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
         print(f"[DB] -> returned {len(df)} progress row(s)")
         return df
 
-    def _connect_web3(self, origin_key: str) -> Web3:
+    def _get_rpc_candidates(self, origin_key: str) -> List[str]:
+        if origin_key in self._rpc_candidates_by_chain:
+            return self._rpc_candidates_by_chain[origin_key]
+
         print(f"[DB] SELECT special RPC for {origin_key}")
         primary_rpc = self.db_connector.get_special_use_rpc(origin_key)
         print(f"[DB] SELECT all RPCs for {origin_key}")
@@ -437,15 +483,24 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
         rpc_candidates = [rpc for rpc in dict.fromkeys([primary_rpc] + fallback_rpcs) if rpc]
         if len(rpc_candidates) == 0:
             raise ValueError(f"No RPC found for chain {origin_key}.")
+        self._rpc_candidates_by_chain[origin_key] = rpc_candidates
+        return rpc_candidates
+
+    def _build_web3(self, rpc_url: str) -> Web3:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
+        try:
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        except Exception:
+            pass
+        return w3
+
+    def _connect_web3(self, origin_key: str) -> Web3:
+        rpc_candidates = self._get_rpc_candidates(origin_key)
 
         last_error = None
         for rpc_url in rpc_candidates:
             try:
-                w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
-                try:
-                    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-                except Exception:
-                    pass
+                w3 = self._build_web3(rpc_url)
                 _ = w3.eth.block_number
                 return w3
             except Exception as exc:
@@ -460,16 +515,24 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
             return self._block_ts_cache[cache_key]
 
         retries = 5
+        rpc_candidates = self._rpc_candidates_by_chain.get(origin_key, [])
+        if not rpc_candidates:
+            rpc_candidates = [None]
+
+        last_error = None
         for attempt in range(retries):
+            rpc_url = rpc_candidates[attempt % len(rpc_candidates)]
+            call_w3 = w3 if rpc_url is None or attempt == 0 else self._build_web3(rpc_url)
             try:
                 self._rpc_get_block_calls += 1
-                block = w3.eth.get_block(block_number)
+                block = call_w3.eth.get_block(block_number)
                 ts = int(block["timestamp"])
                 self._block_ts_cache[cache_key] = ts
                 return ts
             except Exception as exc:
+                last_error = exc
                 if attempt == retries - 1:
-                    raise
+                    raise last_error
                 sleep_seconds = min(2 ** attempt, 8)
                 print(
                     f"{origin_key}: failed to fetch block {block_number} "
@@ -477,6 +540,30 @@ class AdapterFirstBlockOfDay(AbstractAdapter):
                 )
                 time.sleep(sleep_seconds)
         raise RuntimeError("Unreachable block timestamp retry path")
+
+    def _get_latest_fetchable_block_and_ts(self, origin_key: str, w3: Web3, latest_block: int) -> Tuple[int, int]:
+        """
+        Some RPCs briefly report a head block before eth_getBlockByNumber can serve it.
+        Anchor searches on the newest nearby block that is actually fetchable.
+        """
+        latest_block = int(latest_block)
+        last_error = None
+        for offset in [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
+            candidate = max(0, latest_block - offset)
+            try:
+                ts = self._get_block_timestamp(origin_key, w3, candidate)
+                if candidate != latest_block:
+                    print(
+                        f"{origin_key}: using fetchable block {candidate} instead of reported head "
+                        f"{latest_block} for first_block_of_day search."
+                    )
+                return candidate, ts
+            except Exception as exc:
+                last_error = exc
+                if candidate == 0:
+                    break
+
+        raise last_error
 
     def _get_chain_start_block_and_ts(self, origin_key: str, w3: Web3, latest_block: int) -> Tuple[int, int]:
         """
