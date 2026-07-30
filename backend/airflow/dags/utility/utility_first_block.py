@@ -14,7 +14,7 @@ from src.misc.airflow_utils import alert_via_webhook
     description='Pulls in the first_block_of_day metric into fact_kpis.',
     tags=['utility'],
     start_date=datetime(2026,2,12),
-    schedule='10 0 * * *'  # Run daily at 00:05 AM UTC
+    schedule='10 0 * * *'  # Run daily at 00:10 AM UTC
 )
 
 def etl():
