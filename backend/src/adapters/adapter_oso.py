@@ -24,7 +24,8 @@ class AdapterOSO(AbstractAdapter):
         
     """
     def extract(self, load_params:dict):
-        df = self.extract_oss()
+        repo_ref = load_params.get('repo_ref', 'main')
+        df = self.extract_oss(repo_ref)
 
         print_extract(self.name, load_params, df.shape)
         return df 
@@ -39,23 +40,24 @@ class AdapterOSO(AbstractAdapter):
 
     ## This method loads the projects from oss-directory github
     ## It returns a df with columns: ['name', 'display_name', 'description', 'github', 'websites', 'npm', 'social', 'active', 'source']
-    def load_oss_projects(self):
+    def load_oss_projects(self, repo_ref='main'):
         # Get the repository
         repo_url = "https://github.com/opensource-observer/oss-directory/tree/main/data/projects"
-        _, _, _, owner, repo_name, _, branch, *path = repo_url.split('/')
+        _, _, _, owner, repo_name, _, _branch, *path = repo_url.split('/')
         path = '/'.join(path)
-        repo = self.g.get_repo(f"{owner}/{repo_name}")
 
         # Download oss-directory as ZIP file
-        zip_url = f"https://github.com/{owner}/{repo_name}/archive/{branch}.zip"
-        response = requests.get(zip_url)
+        zip_url = f"https://github.com/{owner}/{repo_name}/archive/{repo_ref}.zip"
+        response = requests.get(zip_url, timeout=60)
+        response.raise_for_status()
         zip_content = io.BytesIO(response.content)
 
         # Convert ZIP to df of projects
         df = pd.DataFrame()
         with zipfile.ZipFile(zip_content) as zip_ref:
             for file_name in zip_ref.namelist():
-                if file_name.endswith('.yaml') and file_name.startswith(f"{repo_name}-{branch}/{path}"):
+                file_path = file_name.split('/', 1)[1] if '/' in file_name else ''
+                if file_path.endswith('.yaml') and file_path.startswith(f"{path}/"):
                     with zip_ref.open(file_name) as file:
                         content = file.read().decode('utf-8')
                         content = yaml.safe_load(content)
@@ -89,9 +91,9 @@ class AdapterOSO(AbstractAdapter):
             raise Exception("The number of projects in the OSS export is too low. Something went wrong.")
         
     ## Combine the above functions to get the final df and deactivate dropped projects
-    def extract_oss(self):
+    def extract_oss(self, repo_ref='main'):
         ## get latest oss projects from oss-directory Github repo and our active projects in our db
-        df_oss = self.load_oss_projects()
+        df_oss = self.load_oss_projects(repo_ref)
         df_db = self.db_connector.get_table('oli_oss_directory')
         df_db = df_db[(df_db['active'] == True) & (df_db['source'] == 'OSS_DIRECTORY')]
         df_db = df_db.drop(columns=['logo_path', 'timestamp'])

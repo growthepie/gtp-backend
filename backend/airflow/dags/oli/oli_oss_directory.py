@@ -1,6 +1,9 @@
 from datetime import datetime,timedelta
-from airflow.sdk import dag, task
+from airflow.sdk import dag, get_current_context, task
 from src.misc.airflow_utils import alert_via_webhook
+
+RECENT_COMMIT_WINDOW_SECONDS = 180
+RECONCILE_INTERVAL_MINUTES = 60
 
 @dag(
     default_args={
@@ -14,7 +17,8 @@ from src.misc.airflow_utils import alert_via_webhook
     description='Loads project data from the OSS Directory API',
     tags=['oli', 'daily'],
     start_date=datetime(2025,7,25),
-    schedule='*/2 * * * *'  # Run every 2 minute, make sure to also change line 46!
+    schedule='*/2 * * * *',  # Run every 2 minutes.
+    catchup=False
 )
 
 def etl():
@@ -32,15 +36,23 @@ def etl():
         response.raise_for_status()
         
         latest_commit = response.json()[0]
+        latest_commit_sha = latest_commit['sha']
         commit_time = datetime.fromisoformat(latest_commit['commit']['committer']['date'].replace('Z', '+00:00'))
         now = datetime.now(timezone.utc)
         delta = now - commit_time
+        context = get_current_context()
+        logical_date = context.get('logical_date', now)
+        run_type = str(getattr(context.get('dag_run'), 'run_type', '')).lower()
+        is_manual_run = 'manual' in run_type
+        is_periodic_reconcile = logical_date.minute % RECONCILE_INTERVAL_MINUTES == 0
 
         print(f"Time since last commit: {delta.total_seconds()} seconds")
+        print(f"Latest OSS Directory commit: {latest_commit_sha}")
+        print(f"Periodic reconcile: {is_periodic_reconcile}; manual run: {is_manual_run}")
 
-        ### If the latest commit was within the last 2 minutes (60s * 2 + 10s), proceed with the update
-        if delta.total_seconds() < 180: # takes around 1 minute to propagate changes  
-            print("New commit detected in the last 2 minutes. Proceeding with data update...")
+        ### If the latest commit was recent, or this is a reconcile/manual run, proceed with the update.
+        if delta.total_seconds() < RECENT_COMMIT_WINDOW_SECONDS or is_periodic_reconcile or is_manual_run:
+            print("OSS Directory update condition met. Proceeding with data update...")
             import os
             from src.adapters.adapter_oso import AdapterOSO
             from src.api.json_creation import JSONCreation
@@ -52,7 +64,9 @@ def etl():
             adapter_params = {
                 'webhook' : os.getenv('DISCORD_CONTRACTS')
             }
-            load_params = {}
+            load_params = {
+                'repo_ref': latest_commit_sha
+            }
 
             # initialize adapter
             ad = AdapterOSO(adapter_params, db_connector)
