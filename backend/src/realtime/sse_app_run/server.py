@@ -110,6 +110,9 @@ class RedisSSEServer:
         self.chain_clients = {}  # Track clients per chain
         self.history_compressor = HistoryCompressor()
 
+        # Liveness tracking for the background data_update_loop
+        self.last_loop_tick_ms: Optional[int] = None
+
     def _safe_float(self, value, default=0.0):
         try: return float(value) if value is not None else default
         except (ValueError, TypeError): return default
@@ -201,6 +204,7 @@ class RedisSSEServer:
                 "db": self.config.redis_db,
                 "decode_responses": True, "socket_keepalive": True,
                 "retry_on_timeout": True, "health_check_interval": 30,
+                "socket_timeout": 10, "socket_connect_timeout": 10,
             }
             if self.config.redis_password:
                 redis_params["password"] = self.config.redis_password
@@ -722,6 +726,12 @@ class RedisSSEServer:
         logger.info(f"Starting data update loop with {self.config.update_interval}s interval")
         while True:
             try:
+                # Marks that the loop is still alive and cycling, independent of
+                # whether this iteration succeeds or raises. If a call below hangs
+                # (e.g. a stalled Redis connection with no socket timeout), this
+                # timestamp stops advancing and /health can surface it.
+                self.last_loop_tick_ms = int(datetime.now().timestamp() * 1000)
+
                 await self._update_data()
                 await self._broadcast_to_clients()  # Global broadcast
                 
@@ -913,9 +923,20 @@ class RedisSSEServer:
         """Health check endpoint."""
         chain_connections = sum(len(clients) for clients in self.chain_clients.values())
         total_connections = len(self.connected_clients) + chain_connections
-        
-        return web.json_response({
-            "status": "healthy",
+
+        # A stalled Redis call (or any other silent hang) stops last_loop_tick_ms
+        # from advancing without ever raising, so connection counts and cached
+        # metrics below can look "healthy" even while no new data is flowing.
+        now_ms = int(datetime.now().timestamp() * 1000)
+        loop_stale_threshold_ms = max(self.config.update_interval * 5, 15) * 1000
+        data_loop_age_ms = (now_ms - self.last_loop_tick_ms) if self.last_loop_tick_ms else None
+        data_loop_healthy = data_loop_age_ms is not None and data_loop_age_ms <= loop_stale_threshold_ms
+
+        status = "healthy" if data_loop_healthy else "degraded"
+        body = {
+            "status": status,
+            "data_loop_healthy": data_loop_healthy,
+            "data_loop_last_tick_ms_ago": data_loop_age_ms,
             "global_clients": len(self.connected_clients),
             "chain_clients": chain_connections,
             "total_connections": total_connections,
@@ -928,7 +949,8 @@ class RedisSSEServer:
             "redis_connected": self.redis_client is not None,
             "chain_cache_active": self._chain_cache is not None,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        return web.json_response(body, status=200 if data_loop_healthy else 503)
     
     async def api_data_handler(self, request):
         """REST API endpoint to get current global data."""

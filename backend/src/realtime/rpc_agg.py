@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 
 from web3 import AsyncWeb3, AsyncHTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware
+from web3.exceptions import BlockNotFound
 from src.db_connector import DbConnector
 from src.realtime.rpc_config import rpc_config
 from src.realtime.sse_app_run.history_utils import HistoryCompressor, encode_history_entry, iso_from_ms
@@ -89,7 +90,40 @@ class EVMProcessor(BlockchainProcessor):
     
     def supports_tx_costs(self) -> bool:
         return True
-    
+
+    async def _fetch_basic_block(self, web3: AsyncWeb3, chain_name: str) -> Dict[str, Any]:
+        """Fetch 'latest' with no fee data, used when receipt-derived block info is unavailable."""
+        block = await web3.eth.get_block('latest', full_transactions=False)
+        subblock_count = 1
+        if chain_name == 'megaeth':
+            subblock_count = _coerce_positive_int(block.get('miniBlockCount', 1))
+        return {
+            "number": hex(block.number),
+            "transactions": [tx.hex() if isinstance(tx, bytes) else tx for tx in block.transactions],
+            "timestamp": hex(block.timestamp),
+            "gasUsed": hex(block.gasUsed),
+            "gasLimit": hex(block.gasLimit),
+            "subblock_count": subblock_count,
+        }
+
+    async def _get_block_with_retry(
+        self, web3: AsyncWeb3, chain_name: str, block_number: int, attempts: int = 4, delay: float = 0.12
+    ) -> Optional[Any]:
+        """Retry get_block a few times to absorb node-lag races on very fast chains,
+        where get_block_receipts('latest') reports a block before get_block's
+        backend node has caught up to it (seen on megaeth)."""
+        for attempt in range(attempts):
+            try:
+                return await web3.eth.get_block(block_number, full_transactions=False)
+            except BlockNotFound:
+                if attempt == attempts - 1:
+                    logger.warning(
+                        f"{chain_name}: block {block_number} still not found after {attempts} attempts, "
+                        "falling back to latest block without fee data for this cycle"
+                    )
+                    return None
+                await asyncio.sleep(delay)
+
     async def fetch_latest_block(self, web3: AsyncWeb3, chain_name: str, calc_fees: bool) -> Optional[Dict[str, Any]]:
         """Fetch the latest block receipts and derive all info from them for EVM chains."""
         try:
@@ -113,24 +147,17 @@ class EVMProcessor(BlockchainProcessor):
             
             if not receipts or len(receipts) == 0:
                 # Handle empty blocks - we need to make one minimal call for basic info
-                block = await web3.eth.get_block('latest', full_transactions=False)
-                subblock_count = 1
-                if chain_name == 'megaeth':
-                    subblock_count = _coerce_positive_int(block.get('miniBlockCount', 1))
-                    
-                return {
-                    "number": hex(block.number),
-                    "transactions": [tx.hex() if isinstance(tx, bytes) else tx for tx in block.transactions],
-                    "timestamp": hex(block.timestamp),
-                    "gasUsed": hex(block.gasUsed),
-                    "gasLimit": hex(block.gasLimit),
-                    "subblock_count": subblock_count,
-                }
-            
+                return await self._fetch_basic_block(web3, chain_name)
+
             # Extract all block info from receipts
             first_receipt = receipts[0]
             block_number = first_receipt.blockNumber
-            block = await web3.eth.get_block(block_number, full_transactions=False)
+            block = await self._get_block_with_retry(web3, chain_name, block_number)
+            if block is None:
+                # get_block's backend node hasn't caught up to the block the receipts
+                # endpoint already reported; skip fee calc for this cycle rather than
+                # dropping the whole TPS update.
+                return await self._fetch_basic_block(web3, chain_name)
             block_timestamp = int(block.timestamp)
             block_gas_used = int(block.gasUsed)
             
@@ -595,6 +622,8 @@ class RtBackend:
                 "socket_keepalive_options": {},
                 "retry_on_timeout": True,
                 "health_check_interval": 30,
+                "socket_timeout": 10,
+                "socket_connect_timeout": 10,
             }
             
             # Add password if provided

@@ -40,25 +40,11 @@ rpc_config = {
         "sleeper": 3,
         "calc_fees": True,
     },
-    "blast": {
-        "name": "Blast",
-        "processors": "evm",
-        "stack": "op_stack",
-        "sleeper": 5,
-        "calc_fees": True,
-    },
     "unichain": {
         "name": "Unichain",
         "processors": "evm",
         "stack": "op_stack",
         "sleeper": 3,
-        "calc_fees": True,
-    },
-    "redstone": {
-        "name": "Redstone",
-        "processors": "evm",
-        "stack": "op_stack",
-        "sleeper": 5,
         "calc_fees": True,
     },
     "soneium": {
