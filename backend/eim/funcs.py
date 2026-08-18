@@ -7,6 +7,36 @@ import io
 import requests
 import zipfile
 
+def _download_zip_with_retries(zip_url: str, attempts: int = 3, timeout: int = 30) -> io.BytesIO:
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        response = None
+        try:
+            response = requests.get(zip_url, timeout=timeout)
+            response.raise_for_status()
+            zip_content = io.BytesIO(response.content)
+
+            if not zipfile.is_zipfile(zip_content):
+                preview = response.content[:120].decode("utf-8", errors="replace")
+                content_type = response.headers.get("Content-Type", "unknown")
+                raise zipfile.BadZipFile(
+                    f"Response from {zip_url} is not a zip file "
+                    f"(status={response.status_code}, content_type={content_type}, "
+                    f"bytes={len(response.content)}, preview={preview!r})"
+                )
+
+            zip_content.seek(0)
+            return zip_content
+        except (requests.RequestException, zipfile.BadZipFile) as exc:
+            last_error = exc
+            if attempt == attempts:
+                break
+
+            time.sleep(2 ** (attempt - 1))
+
+    raise RuntimeError(f"Failed to download valid zip from {zip_url} after {attempts} attempts: {last_error}") from last_error
+
 def get_eim_yamls(file_names:list):
     """
     Retrieves the YAML data from the EIM data repository on GitHub.
@@ -20,8 +50,7 @@ def get_eim_yamls(file_names:list):
     _, _, _, owner, repo_name, _, branch, *path = repo_url.split('/')
     path = '/'.join(path)
     zip_url = f"https://github.com/{owner}/{repo_name}/archive/{branch}.zip"
-    response = requests.get(zip_url)
-    zip_content = io.BytesIO(response.content)
+    zip_content = _download_zip_with_retries(zip_url)
 
     path_start = 'ethismoney-data-main/'
     with zipfile.ZipFile(zip_content) as zip_ref:
