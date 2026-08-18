@@ -4,9 +4,39 @@ import zipfile
 import io
 import yaml
 import requests
+import time
 
 from src.adapters.abstract_adapters import AbstractAdapter
 from src.misc.helper_functions import send_discord_message, print_init, print_load, print_extract
+
+def _download_zip_with_retries(zip_url: str, attempts: int = 3, timeout: int = 60) -> io.BytesIO:
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(zip_url, timeout=timeout)
+            response.raise_for_status()
+            zip_content = io.BytesIO(response.content)
+
+            if not zipfile.is_zipfile(zip_content):
+                preview = response.content[:120].decode("utf-8", errors="replace")
+                content_type = response.headers.get("Content-Type", "unknown")
+                raise zipfile.BadZipFile(
+                    f"Response from {zip_url} is not a zip file "
+                    f"(status={response.status_code}, content_type={content_type}, "
+                    f"bytes={len(response.content)}, preview={preview!r})"
+                )
+
+            zip_content.seek(0)
+            return zip_content
+        except (requests.RequestException, zipfile.BadZipFile) as exc:
+            last_error = exc
+            if attempt == attempts:
+                break
+
+            time.sleep(2 ** (attempt - 1))
+
+    raise RuntimeError(f"Failed to download valid zip from {zip_url} after {attempts} attempts: {last_error}") from last_error
 
 class AdapterOSO(AbstractAdapter):
     """
@@ -48,9 +78,7 @@ class AdapterOSO(AbstractAdapter):
 
         # Download oss-directory as ZIP file
         zip_url = f"https://github.com/{owner}/{repo_name}/archive/{repo_ref}.zip"
-        response = requests.get(zip_url, timeout=60)
-        response.raise_for_status()
-        zip_content = io.BytesIO(response.content)
+        zip_content = _download_zip_with_retries(zip_url)
 
         # Convert ZIP to df of projects
         df = pd.DataFrame()
