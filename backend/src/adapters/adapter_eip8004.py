@@ -31,6 +31,10 @@ class EIP8004Adapter(AbstractAdapter):
         self.current_rpc = None
         self.list_of_rpcs = None
         self.current_rpc_index = 0
+        self.default_log_chunk_size = 1000
+        self.log_chunk_size_by_chain = {
+            'ronin': 200,
+        }
 
 
     def extract(self, extract_params: dict):
@@ -184,7 +188,7 @@ class EIP8004Adapter(AbstractAdapter):
     #-#-# helper functions #-#-#
 
 
-    def _call_with_rpc_failover(self, chain: str, rpc_map: pd.DataFrame, call_fn):
+    def _call_with_rpc_failover(self, chain: str, rpc_map: pd.DataFrame, call_fn, context: str = None):
         """
         Execute a read-only chain call and rotate through chain RPCs on failures.
         """
@@ -204,11 +208,15 @@ class EIP8004Adapter(AbstractAdapter):
                     f"(rpcs {attempt + 1}/{max_attempts}): {e}"
                 )
 
+        context_msg = f" ({context})" if context else ""
         raise RuntimeError(
-            f"RPC call failed on chain {chain} after trying {max_attempts} RPC endpoints."
+            f"RPC call failed on chain {chain}{context_msg} after trying "
+            f"{max_attempts} RPC endpoints. Last error: {last_error}"
         ) from last_error
 
     def extract_logs(self, chain, rpc_map, contract_abi, contract_address, event, from_block, to_block):
+        chunk_size = self.log_chunk_size_by_chain.get(chain, self.default_log_chunk_size)
+
         def _call_fn(w3):
             ad = AdapterLogs(w3, contract_abi)
             return ad.extract({
@@ -216,11 +224,16 @@ class EIP8004Adapter(AbstractAdapter):
                 'from_block': from_block,
                 'to_block': to_block,
                 'topics': ad.get_topic0_by_event_name(event),
-                'chunk_size': 1000,
+                'chunk_size': chunk_size,
                 'decode': True
             })
 
-        return self._call_with_rpc_failover(chain, rpc_map, _call_fn)
+        return self._call_with_rpc_failover(
+            chain,
+            rpc_map,
+            _call_fn,
+            context=f"event={event}, from_block={from_block}, to_block={to_block}, chunk_size={chunk_size}",
+        )
 
     def get_new_w3(self, chain: str, rpc_map: pd.DataFrame, rotate: bool = False):
         """
