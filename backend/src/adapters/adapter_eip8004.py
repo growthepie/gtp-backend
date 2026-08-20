@@ -35,6 +35,9 @@ class EIP8004Adapter(AbstractAdapter):
         self.log_chunk_size_by_chain = {
             'ronin': 200,
         }
+        self.log_chunk_sleep_by_chain = {
+            'ronin': 0.7,
+        }
 
 
     def extract(self, extract_params: dict):
@@ -216,24 +219,37 @@ class EIP8004Adapter(AbstractAdapter):
 
     def extract_logs(self, chain, rpc_map, contract_abi, contract_address, event, from_block, to_block):
         chunk_size = self.log_chunk_size_by_chain.get(chain, self.default_log_chunk_size)
+        chunk_sleep = self.log_chunk_sleep_by_chain.get(chain, 0)
+        all_logs = []
 
-        def _call_fn(w3):
-            ad = AdapterLogs(w3, contract_abi)
-            return ad.extract({
-                'contract_address': contract_address,
-                'from_block': from_block,
-                'to_block': to_block,
-                'topics': ad.get_topic0_by_event_name(event),
-                'chunk_size': chunk_size,
-                'decode': True
-            })
+        for chunk_start in range(from_block, to_block + 1, chunk_size):
+            chunk_end = min(chunk_start + chunk_size - 1, to_block)
 
-        return self._call_with_rpc_failover(
-            chain,
-            rpc_map,
-            _call_fn,
-            context=f"event={event}, from_block={from_block}, to_block={to_block}, chunk_size={chunk_size}",
-        )
+            def _call_fn(w3):
+                ad = AdapterLogs(w3, contract_abi)
+                return ad.get_logs(
+                    start_block=chunk_start,
+                    end_block=chunk_end,
+                    contract_address=contract_address,
+                    topics=ad.get_topic0_by_event_name(event),
+                    decode=True,
+                )
+
+            chunk_logs = self._call_with_rpc_failover(
+                chain,
+                rpc_map,
+                _call_fn,
+                context=(
+                    f"event={event}, from_block={from_block}, to_block={to_block}, "
+                    f"chunk_start={chunk_start}, chunk_end={chunk_end}, chunk_size={chunk_size}"
+                ),
+            )
+            all_logs.extend(chunk_logs)
+
+            if chunk_sleep > 0:
+                time.sleep(chunk_sleep)
+
+        return all_logs
 
     def get_new_w3(self, chain: str, rpc_map: pd.DataFrame, rotate: bool = False):
         """
