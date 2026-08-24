@@ -8,6 +8,7 @@ import time
 import pickle
 import math
 from src.adapters.rpc_funcs.web3 import Web3CC
+from src.adapters.rpc_funcs.funcs_backfill import is_block_not_found_error
 from sqlalchemy import text
 from src.main_config import get_main_config 
 from src.adapters.rpc_funcs.chain_configs import chain_configs
@@ -1226,7 +1227,13 @@ def fetch_data_for_range(w3, block_start, block_end, chain): # <--- Added chain 
     try:
         # Loop through each block in the range
         for block_num in range(block_start, block_end + 1):
-            block = w3.eth.get_block(block_num, full_transactions=True)
+            try:
+                block = w3.eth.get_block(block_num, full_transactions=True)
+            except Exception as e:
+                if chain.lower() == "zksync_era" and is_block_not_found_error(e):
+                    print(f"...skipping non-existent zkSync Era block {block_num} (0x{block_num:x}): {e}")
+                    continue
+                raise
             
             # Extract block header data immediately (efficient, no extra RPC call)
             if chain.lower() == 'ethereum':

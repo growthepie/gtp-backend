@@ -1,6 +1,6 @@
 import time
 from src.adapters.abstract_adapters import AbstractAdapterRaw
-from src.adapters.rpc_funcs.funcs_backfill import check_and_record_missing_block_ranges, find_first_block_of_day, find_last_block_of_day, date_to_unix_timestamp
+from src.adapters.rpc_funcs.funcs_backfill import check_and_record_missing_block_ranges, find_first_block_of_day, find_last_block_of_day, date_to_unix_timestamp, is_block_not_found_error
 from queue import Queue, Empty
 from threading import Thread, Lock
 from src.adapters.rpc_funcs.utils import Web3CC, connect_to_gcs, check_db_connection, check_gcs_connection, get_latest_block, connect_to_node, fetch_and_process_range, load_4bytes_pickle
@@ -475,7 +475,13 @@ class NodeAdapter(AbstractAdapterRaw):
         Returns:
             int: The number of transactions in the block.
         """
-        block = w3.eth.get_block(block_num, full_transactions=False)
+        try:
+            block = w3.eth.get_block(block_num, full_transactions=False)
+        except Exception as e:
+            if self.chain.lower() == "zksync_era" and is_block_not_found_error(e):
+                print(f"Skipping non-existent zkSync Era block {block_num} (0x{block_num:x}) while checking transactions: {e}")
+                return 0
+            raise
         return len(block['transactions'])
 
     def check_range_has_transactions(self, start, end):

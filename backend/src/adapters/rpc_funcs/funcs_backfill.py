@@ -99,6 +99,39 @@ def date_to_unix_timestamp(year, month, day):
     """
     return int(time.mktime(datetime(year, month, day).timetuple()))
 
+def is_block_not_found_error(error):
+    """
+    Returns True for RPC errors that mean the requested block number does not
+    exist on the chain/RPC, not that the RPC is temporarily unavailable.
+    """
+    error_msg = str(error).lower()
+    return (
+        ("block" in error_msg and "not found" in error_msg)
+        or "header not found" in error_msg
+        or "unknown block" in error_msg
+    )
+
+def find_nearest_existing_block(w3, block_num, min_block, max_block, max_distance=10000):
+    """
+    Finds a nearby existing block around a missing block number.
+
+    Some chains expose sparse block-number ranges through their RPCs. A binary
+    search by timestamp must be able to step across those gaps without returning
+    a boundary that cannot later be fetched.
+    """
+    max_distance = min(max_distance, max(max_block - min_block, 0))
+    for offset in range(1, max_distance + 1):
+        for candidate in (block_num + offset, block_num - offset):
+            if candidate < min_block or candidate > max_block:
+                continue
+            try:
+                return candidate, w3.eth.get_block(candidate)
+            except Exception as e:
+                if not is_block_not_found_error(e):
+                    raise
+
+    return None, None
+
 def find_first_block_of_day(w3, target_timestamp):
     """
     Finds the first block of the day based on a target timestamp using a binary search.
@@ -119,8 +152,10 @@ def find_first_block_of_day(w3, target_timestamp):
         try:
             return w3.eth.get_block(block_num)
         except Exception as e:
-            print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
-            return None
+            if is_block_not_found_error(e):
+                print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
+                return None
+            raise
     
     while min_block <= max_block:
         mid_block = (min_block + max_block) // 2
@@ -128,29 +163,10 @@ def find_first_block_of_day(w3, target_timestamp):
         # Try to get the block, handle missing blocks
         block = safe_get_block(mid_block)
         if block is None:
-            # If mid_block doesn't exist, try to find a nearby block that does
-            found_block = False
-            for offset in range(1, min(100, max_block - mid_block + 1)):
-                # Try blocks after mid_block
-                if mid_block + offset <= max_block:
-                    block = safe_get_block(mid_block + offset)
-                    if block is not None:
-                        mid_block = mid_block + offset
-                        found_block = True
-                        break
-                
-                # Try blocks before mid_block
-                if mid_block - offset >= min_block:
-                    block = safe_get_block(mid_block - offset)
-                    if block is not None:
-                        mid_block = mid_block - offset
-                        found_block = True
-                        break
-            
-            if not found_block:
-                print(f"Could not find any valid blocks around {mid_block} (0x{mid_block:x})")
-                # Fallback: return the minimum block that should exist
-                return max(min_block, 1)
+            missing_mid_block = mid_block
+            mid_block, block = find_nearest_existing_block(w3, missing_mid_block, min_block, max_block)
+            if block is None:
+                raise ValueError(f"Could not find any valid blocks around {missing_mid_block} (0x{missing_mid_block:x})")
         
         mid_block_timestamp = block.timestamp
 
@@ -189,8 +205,10 @@ def find_last_block_of_day(w3, target_timestamp):
         try:
             return w3.eth.get_block(block_num)
         except Exception as e:
-            print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
-            return None
+            if is_block_not_found_error(e):
+                print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
+                return None
+            raise
 
     min_block = 0
     max_block = w3.eth.block_number
@@ -200,29 +218,10 @@ def find_last_block_of_day(w3, target_timestamp):
         # Try to get the block, handle missing blocks
         block = safe_get_block(mid_block)
         if block is None:
-            # If mid_block doesn't exist, try to find a nearby block that does
-            found_block = False
-            for offset in range(1, min(100, max_block - mid_block + 1)):
-                # Try blocks after mid_block
-                if mid_block + offset <= max_block:
-                    block = safe_get_block(mid_block + offset)
-                    if block is not None:
-                        mid_block = mid_block + offset
-                        found_block = True
-                        break
-                
-                # Try blocks before mid_block
-                if mid_block - offset >= min_block:
-                    block = safe_get_block(mid_block - offset)
-                    if block is not None:
-                        mid_block = mid_block - offset
-                        found_block = True
-                        break
-            
-            if not found_block:
-                print(f"Could not find any valid blocks around {mid_block} (0x{mid_block:x})")
-                # Fallback: return the maximum block that should exist
-                return max_block
+            missing_mid_block = mid_block
+            mid_block, block = find_nearest_existing_block(w3, missing_mid_block, min_block, max_block)
+            if block is None:
+                raise ValueError(f"Could not find any valid blocks around {missing_mid_block} (0x{missing_mid_block:x})")
         
         mid_block_timestamp = block.timestamp
 
