@@ -38,6 +38,7 @@ class EIP8004Adapter(AbstractAdapter):
         self.all_events_implemented = ['URIUpdated', 'Registered', 'ResponseAppended', 'NewFeedback']
         chains = extract_params.get('chains', ['*'])
         events = extract_params.get('events', self.all_events_implemented)
+        load_incrementally = extract_params.get('load_incrementally', False)
         rpc_map = self.get_origin_keys_with_rpcs()
         
         if chains == ['*']:
@@ -50,6 +51,7 @@ class EIP8004Adapter(AbstractAdapter):
 
         # all data
         df_all = pd.DataFrame()
+        skipped_ranges = []
 
         # get current progress from db
         df_progress = self.get_df_progress()
@@ -94,16 +96,42 @@ class EIP8004Adapter(AbstractAdapter):
                             )
                         from_block = block_date_map[date]
                         to_block = block_date_map[next_available_date] - 1
-                        daily_logs = self.extract_logs(chain, rpc_map, contract_abi, contract_address, event, from_block, to_block)
                         print(f"-- Extracting {date} starting from block {from_block} to {to_block}")
+                        try:
+                            daily_logs = self.extract_logs(chain, rpc_map, contract_abi, contract_address, event, from_block, to_block)
+                        except RuntimeError as e:
+                            skipped_ranges.append({
+                                'origin_key': chain,
+                                'event': event,
+                                'date': date,
+                                'from_block': from_block,
+                                'to_block': to_block,
+                                'error': str(e),
+                            })
+                            print(
+                                f"-- Skipping {chain} {event} on {date} after RPC failover failed "
+                                f"for blocks {from_block}-{to_block}: {e}"
+                            )
+                            continue
 
                         # aggregate
                         df = self.aggregate_daily_logs(daily_logs, event)
                         df['date'] = date
                         df['origin_key'] = chain
 
+                        if load_incrementally:
+                            self.load(df)
+
                         # merge df into df_all
                         df_all = pd.concat([df_all, df], ignore_index=True)
+
+        if skipped_ranges:
+            print(f"Skipped {len(skipped_ranges)} EIP-8004 range(s) after RPC failures:")
+            for skipped in skipped_ranges:
+                print(
+                    f"- {skipped['origin_key']} {skipped['event']} {skipped['date']} "
+                    f"blocks {skipped['from_block']}-{skipped['to_block']}: {skipped['error']}"
+                )
 
         return df_all     
         

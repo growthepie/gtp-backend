@@ -27,13 +27,13 @@ def run_dag():
         ad = EIP8004Adapter({}, db_connector)
         df = ad.extract({
             'chains': ['*'],
-            'events': ['*']
+            'events': ['*'],
+            'load_incrementally': True
         })
         df_uri = ad.extract_uri({
             'chains': ['*'],
             'df': df # alternatively: 'days_back': 3, scrapes metadata behind all URIs from the last 3 days
         })
-        ad.load(df)
         ad.load_uri(df_uri)
 
     @task
