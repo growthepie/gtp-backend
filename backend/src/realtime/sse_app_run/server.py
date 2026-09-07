@@ -55,6 +55,7 @@ class ServerConfig:
     cleanup_interval_ms: int = 60000
     max_connections: int = 500
     max_data_age_seconds: int = 60
+    client_write_timeout: int = 5
 
     @classmethod
     def from_env(cls) -> 'ServerConfig':
@@ -709,8 +710,15 @@ class RedisSSEServer:
             sse_message = f"data: {message}\n\n"
             disconnected_clients = set()
             for client in self.connected_clients:
-                try: await client.write(sse_message.encode('utf-8'))
+                try:
+                    await asyncio.wait_for(
+                        client.write(sse_message.encode('utf-8')),
+                        timeout=self.config.client_write_timeout,
+                    )
                 except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    disconnected_clients.add(client)
+                except asyncio.TimeoutError:
+                    logger.warning("Client write timed out, dropping slow/stuck client")
                     disconnected_clients.add(client)
                 except Exception as e:
                     logger.warning(f"Error sending to client: {str(e)}")
@@ -871,8 +879,14 @@ class RedisSSEServer:
             
             for client in self.chain_clients[chain_name]:
                 try:
-                    await client.write(sse_message.encode('utf-8'))
+                    await asyncio.wait_for(
+                        client.write(sse_message.encode('utf-8')),
+                        timeout=self.config.client_write_timeout,
+                    )
                 except (ConnectionResetError, ConnectionAbortedError, OSError):
+                    disconnected_clients.add(client)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Client write to chain {chain_name} timed out, dropping slow/stuck client")
                     disconnected_clients.add(client)
                 except Exception as e:
                     logger.warning(f"Error sending to chain client: {str(e)}")
