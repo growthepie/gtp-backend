@@ -768,7 +768,9 @@ def etl():
 
     ## Write new unlabeled contracts and depreciated owner project to airtable from db
     write_contracts = airtable_write_contracts()  ## write contracts from DB to airtable
-    write_pool = airtable_write_label_pool_reattest() ## write label pool reattest from DB to airtable
+    # Label Pool Reattest writes are handled by the hourly oli_reattest DAG.
+    # Do not also write them here: this DAG's 24h lookback can recreate rows
+    # that reviewers manually deleted from Airtable.
     write_remap = airtable_write_depreciated_owner_project() ## write remap owner project from DB to airtable
     write_protocol_likely = airtable_write_protocol_likely_to_automated() ## write protocol-likely contracts back to Label Pool Automated for owner-project review
 
@@ -777,8 +779,8 @@ def etl():
 
     # Define execution order
     # read_automated runs in parallel with read_pool; write side is handled by oli_automated_labeler DAG
-    # write_protocol_likely runs in parallel with write_pool and write_remap after view refresh
-    sync_categories >> sync_chains >> read_contracts >> [read_pool, read_automated] >> read_remap >> refresh_views >> write_contracts >> write_pool >> write_remap >> revoke_onchain
+    # write_protocol_likely runs in parallel with write_remap after view refresh
+    sync_categories >> sync_chains >> read_contracts >> [read_pool, read_automated] >> read_remap >> refresh_views >> write_contracts >> write_remap >> revoke_onchain
     
 etl()
 
