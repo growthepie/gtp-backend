@@ -3,6 +3,8 @@ from hexbytes import HexBytes
 from src.adapters.abstract_adapters import AbstractAdapter
 from web3 import Web3
 import json
+import re
+from typing import Optional
 
 class AdapterLogs(AbstractAdapter):
     """
@@ -107,12 +109,73 @@ class AdapterLogs(AbstractAdapter):
             filter_params['topics'] = topics
         
         # Get the logs
-        logs = self.w3.eth.get_logs(filter_params)
+        try:
+            logs = self.w3.eth.get_logs(filter_params)
+        except Exception as e:
+            if self._is_block_range_too_large_error(e) and start_block < end_block:
+                max_blocks = self._extract_block_range_limit(e)
+                if max_blocks is None:
+                    max_blocks = (end_block - start_block + 1) // 2
+
+                split_logs = []
+                for split_start in range(start_block, end_block + 1, max_blocks):
+                    split_end = min(split_start + max_blocks - 1, end_block)
+                    split_logs.extend(self.get_logs(
+                        start_block=split_start,
+                        end_block=split_end,
+                        contract_address=contract_address,
+                        topics=topics,
+                        decode=decode
+                    ))
+                return split_logs
+            raise
         
         # decode logs if requested, requires that contract_abi_json was provided in the constructor
         if decode:
             logs = self.decode_logs(logs)
         return logs
+
+    def _is_block_range_too_large_error(self, error: Exception) -> bool:
+        """
+        Detect RPC errors from providers that reject eth_getLogs ranges.
+        Web3/provider versions expose these as ValueError/Web3RPCError/Exception
+        with either a dict payload or the dict stringified in the message.
+        """
+        payloads = list(getattr(error, "args", ()))
+        payloads.append(str(error))
+
+        for payload in payloads:
+            if isinstance(payload, dict):
+                code = payload.get("code")
+                message = str(payload.get("message", ""))
+                data = str(payload.get("data", ""))
+            else:
+                payload_text = str(payload)
+                code = -32602 if "-32602" in payload_text else None
+                message = payload_text
+                data = payload_text
+
+            text = f"{message} {data}".lower()
+            if code == -32602 and "block range" in text and re.search(r"too large|maximum", text):
+                return True
+
+        return False
+
+    def _extract_block_range_limit(self, error: Exception) -> Optional[int]:
+        payloads = list(getattr(error, "args", ()))
+        payloads.append(str(error))
+
+        for payload in payloads:
+            if isinstance(payload, dict):
+                text = f"{payload.get('message', '')} {payload.get('data', '')}"
+            else:
+                text = str(payload)
+
+            match = re.search(r"maximum\s+(\d+)\s+blocks", text, flags=re.IGNORECASE)
+            if match:
+                return max(int(match.group(1)), 1)
+
+        return None
 
     def turn_logs_into_df(self, logs):
         """
@@ -175,4 +238,3 @@ class AdapterLogs(AbstractAdapter):
             if event_name.lower() + '(' in str(event).lower():
                 return '0x' + topic0
         return None
-        
