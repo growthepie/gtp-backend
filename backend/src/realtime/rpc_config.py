@@ -7,6 +7,7 @@
 #   - `stack`: The stack type (e.g., "l1", "op_stack", "nitro", "elastic", "basic") which determines the fee calculation and other processing specifics.
 #   - `sleeper`: The time to wait between requests in seconds.
 #   - `calc_fees`: A boolean indicating whether to calculate fees for transactions on this chain.
+#   - `failover_on_receipt_failure`: If true, eth_getBlockReceipts failures trigger RPC failover before falling back to basic block data.
 
 rpc_config = {
     ## L1
@@ -16,6 +17,7 @@ rpc_config = {
         "stack": "l1",
         "sleeper": 6,
         "calc_fees": True,
+        "failover_on_receipt_failure": True,
     },
     
     ## OP Stack chains
