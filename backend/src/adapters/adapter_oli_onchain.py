@@ -107,6 +107,7 @@ class AdapterOLIOnchain(AbstractAdapter):
                     if caip10.count(":") != 2:
                         # invalid caip10 format, max 2x":" allowed
                         print(f"Invalid caip10 format: {caip10} for uid: {uid}. Skipping indexing of this label.")
+                        continue
                     else:
                         chain_namespace, chain_reference, address = caip10.split(":", 2)
                         label_data['chain_id'] = chain_namespace + ':' + chain_reference
