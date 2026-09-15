@@ -4,6 +4,7 @@ SELECT
     MAX(revocation_time) AS last_time_revoked
 FROM public.attestations
 WHERE 
-	revocation_time >= '2000-01-01' or revocation_time is null
+	(revocation_time >= '2000-01-01' or revocation_time is null)
+    {{ private_attester_filter }}
 GROUP BY attester
 ORDER BY last_time_created DESC;

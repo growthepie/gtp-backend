@@ -15,5 +15,6 @@ SELECT
     "time" AS time_created
 FROM public.attestations
 WHERE attester = decode('{{ attester }}', 'hex')
+{{ private_attester_filter }}
 ORDER BY time_created DESC
 LIMIT {{ take }};

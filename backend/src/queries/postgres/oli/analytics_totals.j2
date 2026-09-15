@@ -1,8 +1,8 @@
 SELECT 
-    (SELECT COUNT(*) FROM public.labels) AS count_tags,
-    (SELECT COUNT(*) FROM public.attestations) AS count_attestations,
-    (SELECT COUNT(*) FROM public.attestations WHERE revoked = true) AS revoked_count_attestations,
-    (SELECT COUNT(*) FROM public.labels WHERE is_offchain = true) AS offchain_count_tags,
-    (SELECT COUNT(*) FROM public.attestations WHERE is_offchain = true) AS offchain_count_attestations,
-    (SELECT COUNT(*) FROM public.labels WHERE is_offchain = false) AS onchain_count_tags,
-    (SELECT COUNT(*) FROM public.attestations WHERE is_offchain = false) AS onchain_count_attestations;
+    (SELECT COUNT(*) FROM public.labels {{ private_attester_where_filter }}) AS count_tags,
+    (SELECT COUNT(*) FROM public.attestations {{ private_attester_where_filter }}) AS count_attestations,
+    (SELECT COUNT(*) FROM public.attestations WHERE revoked = true {{ private_attester_filter }}) AS revoked_count_attestations,
+    (SELECT COUNT(*) FROM public.labels WHERE is_offchain = true {{ private_attester_filter }}) AS offchain_count_tags,
+    (SELECT COUNT(*) FROM public.attestations WHERE is_offchain = true {{ private_attester_filter }}) AS offchain_count_attestations,
+    (SELECT COUNT(*) FROM public.labels WHERE is_offchain = false {{ private_attester_filter }}) AS onchain_count_tags,
+    (SELECT COUNT(*) FROM public.attestations WHERE is_offchain = false {{ private_attester_filter }}) AS onchain_count_attestations;

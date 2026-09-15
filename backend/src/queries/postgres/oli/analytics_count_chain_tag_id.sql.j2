@@ -3,5 +3,6 @@ SELECT
     tag_id, 
     COUNT(*) as row_count
 FROM public.labels
+{{ private_attester_where_filter }}
 GROUP BY chain_id, tag_id
 ORDER BY chain_id, tag_id;

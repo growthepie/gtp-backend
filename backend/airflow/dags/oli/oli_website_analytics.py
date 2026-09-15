@@ -28,15 +28,18 @@ def main():
         from datetime import datetime
         from src.misc.jinja_helper import execute_jinja_query
         from src.misc.helper_functions import upload_json_to_cf_s3, fix_dict_nan
+        from src.oli.api.oli_private_attesters import private_attester_exclusion_sql
         import os
         s3_bucket = os.getenv("S3_CF_BUCKET")
         cf_distribution_id = os.getenv("CF_DISTRIBUTION_ID")
         db_connector_oli = DbConnector(db_name='oli')
+        private_attester_filter = private_attester_exclusion_sql("attester")
+        private_attester_where_filter = private_attester_exclusion_sql("attester", prefix="WHERE")
 
 
         ### Attester analytics
         # get all attesters
-        query_parameters = {}
+        query_parameters = {"private_attester_filter": private_attester_filter}
         df = execute_jinja_query(db_connector_oli, "oli/analytics_all_attesters.sql.j2", query_parameters, return_df=True)
         # get timestamp of 2 days ago
         threshold_time = datetime.now().astimezone() - timedelta(days=2)
@@ -45,9 +48,9 @@ def main():
         df = df[(df['last_time_revoked'] > threshold_time) | (df['last_time_revoked'].isna())]
         # iterate over each attester in df and create custom json file for each attester
         for i, row in df.iterrows():
-            query_parameters = {"attester": row['attester']}
+            query_parameters = {"attester": row['attester'], "private_attester_filter": private_attester_filter}
             df_att = execute_jinja_query(db_connector_oli, "oli/analytics_count_by_attester.sql.j2", query_parameters, return_df=True)
-            query_parameters = {"attester": row['attester'], "take": 25}
+            query_parameters = {"attester": row['attester'], "take": 25, "private_attester_filter": private_attester_filter}
             df_att_latest = execute_jinja_query(db_connector_oli, "oli/analytics_latest_by_attester.sql.j2", query_parameters, return_df=True)
             # turn time_created into unix timestamp
             df_att_latest['time_created'] = df_att_latest['time_created'].apply(lambda x: int(x.timestamp()) if x is not None else None)
@@ -87,7 +90,7 @@ def main():
 
 
         ### Totals by chain & tag id
-        query_parameters = {}
+        query_parameters = {"private_attester_where_filter": private_attester_where_filter}
         df_totals = execute_jinja_query(db_connector_oli, "oli/analytics_count_chain_tag_id.sql.j2", query_parameters, return_df=True)
         data_dict = {
             "data": {
@@ -110,7 +113,10 @@ def main():
 
 
         ### Totals overall
-        query_parameters = {}
+        query_parameters = {
+            "private_attester_filter": private_attester_filter,
+            "private_attester_where_filter": private_attester_where_filter,
+        }
         df_totals = execute_jinja_query(db_connector_oli, "oli/analytics_totals.j2", query_parameters, return_df=True)
         data_dict = {
             "data": {

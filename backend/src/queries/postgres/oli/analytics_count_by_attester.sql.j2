@@ -4,5 +4,6 @@ SELECT
     COUNT(*) as row_count
 FROM public.labels
 WHERE attester = decode('{{ attester }}', 'hex')
+{{ private_attester_filter }}
 GROUP BY chain_id, tag_id
 ORDER BY chain_id ASC, tag_id DESC;
