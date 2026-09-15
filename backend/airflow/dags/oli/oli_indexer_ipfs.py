@@ -28,6 +28,7 @@ def main():
         import time
         from src.db_connector import DbConnector
         from src.misc.helper_functions import upload_json_to_filebase_ipfs
+        from src.oli.api.oli_private_attesters import private_attester_exclusion_sql
         import concurrent.futures
 
         db_connector = DbConnector(db_name='oli')
@@ -38,7 +39,8 @@ def main():
         while True:
 
             ## fetch data to upload ##
-            query_select = """
+            private_attester_filter = private_attester_exclusion_sql("attester")
+            query_select = f"""
                 SELECT 
                     uid, 
                     time, 
@@ -47,14 +49,15 @@ def main():
                     schema_info,
                     table_name
                 FROM (
-                    SELECT uid, time, is_offchain, raw, schema_info, ipfs_hash, 'attestations' AS table_name
+                    SELECT uid, time, attester, is_offchain, raw, schema_info, ipfs_hash, 'attestations' AS table_name
                     FROM public.attestations
                     UNION ALL
-                    SELECT uid, time, is_offchain, raw, schema_info, ipfs_hash, 'trust_lists' AS table_name
+                    SELECT uid, time, attester, is_offchain, raw, schema_info, ipfs_hash, 'trust_lists' AS table_name
                     FROM trust_lists
                 ) AS combined_tables
                 WHERE is_offchain = true
                     AND (ipfs_hash IS NULL OR ipfs_hash = '')
+                    {private_attester_filter}
                 ORDER BY time
                 LIMIT 250
             """

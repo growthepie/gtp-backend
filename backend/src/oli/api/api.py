@@ -13,6 +13,10 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_abi import decode as abi_decode
 from concurrent.futures import ProcessPoolExecutor
+try:
+    from oli_private_attesters import get_private_attester_bytes
+except ModuleNotFoundError:
+    from src.oli.api.oli_private_attesters import get_private_attester_bytes
 
 # from oli import OLI
 # from oli.data.trust import UtilsTrust
@@ -186,6 +190,20 @@ def hex_to_bytes(value: Optional[str]) -> Optional[bytes]:
 def unix_str_to_datetime(value: str) -> datetime:
     ts_int = int(value)
     return datetime.fromtimestamp(ts_int, tz=timezone.utc)
+
+def add_private_attester_exclusion(
+    where_clauses: List[str],
+    params: List[Any],
+    idx: int,
+    column_name: str = "attester",
+) -> int:
+    private_attesters = get_private_attester_bytes()
+    if not private_attesters:
+        return idx
+
+    where_clauses.append(f"{column_name} <> ALL(${idx}::bytea[])")
+    params.append(private_attesters)
+    return idx + 1
 
 #
 # MODELS (Pydantic v2 style)
@@ -1030,8 +1048,11 @@ async def get_attestations(
         # ---- Case 1: UID lookup ----
         if uid:
             uid_bytes = hex_to_bytes(uid)
+            where_clauses = ["uid = $1"]
+            params = [uid_bytes]
+            add_private_attester_exclusion(where_clauses, params, 2)
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT
                     uid,
                     time,
@@ -1044,10 +1065,10 @@ async def get_attestations(
                     schema_info,
                     tags_json
                 FROM public.attestations
-                WHERE uid = $1
+                WHERE {' AND '.join(where_clauses)}
                 LIMIT 1;
                 """,
-                uid_bytes,
+                *params,
             )
             if row is None:
                 return AttestationQueryResponse(count=0, attestations=[])
@@ -1093,6 +1114,8 @@ async def get_attestations(
             where_clauses.append(f"time > ${idx}")
             params.append(since_dt)
             idx += 1
+
+        idx = add_private_attester_exclusion(where_clauses, params, idx)
 
         # Join WHERE clauses
         where_sql = ""
@@ -1162,16 +1185,19 @@ async def get_trust_lists(
     async with app.state.db.acquire() as conn:
         # Case 1: direct UID lookup
         if uid:
+            where = ["uid = $1"]
+            params = [hex_to_bytes(uid)]
+            add_private_attester_exclusion(where, params, 2)
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT uid, "time", attester, recipient, revoked, is_offchain,
                        tx_hash, ipfs_hash, revocation_time, raw, last_updated_time,
                        schema_info, owner_name, attesters, attestations
                   FROM public.trust_lists
-                 WHERE uid = $1
+                 WHERE {' AND '.join(where)}
                  LIMIT 1;
                 """,
-                hex_to_bytes(uid),
+                *params,
             )
             if not row:
                 return TrustListQueryResponse(count=0, trust_lists=[])
@@ -1184,6 +1210,7 @@ async def get_trust_lists(
             where.append(f"attester = ${i}")
             params.append(hex_to_bytes(attester.lower()))
             i += 1
+        i = add_private_attester_exclusion(where, params, i)
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = "DESC" if order.lower() == "desc" else "ASC"
@@ -1324,6 +1351,8 @@ async def get_labels(
         params.append(chain_id)
         next_param += 1
 
+    next_param = add_private_attester_exclusion(where_clauses, params, next_param)
+
     # LIMIT is always the last param
     limit_param_num = next_param
     params.append(int(limit))
@@ -1406,11 +1435,21 @@ async def get_labels_bulk(req: BulkLabelsRequest):
 
     # 2. build SQL dynamically based on optional chain_id and include_all
     params = [unique_addr_list]
-    chain_filter_sql = ""
+    filter_clauses = []
+    next_param = 2
 
     if req.chain_id:
-        chain_filter_sql = "AND l.chain_id = $2"
+        filter_clauses.append(f"AND l.chain_id = ${next_param}")
         params.append(req.chain_id)
+        next_param += 1
+
+    private_attesters = get_private_attester_bytes()
+    if private_attesters:
+        filter_clauses.append(f"AND l.attester <> ALL(${next_param}::bytea[])")
+        params.append(private_attesters)
+        next_param += 1
+
+    filter_sql = "\n            ".join(filter_clauses)
 
     if req.include_all:
         # No collapse: return all labels then enforce per-address limit in Python
@@ -1424,7 +1463,7 @@ async def get_labels_bulk(req: BulkLabelsRequest):
                 l.attester
             FROM public.labels AS l
             WHERE l.address = ANY($1)
-            {chain_filter_sql}
+            {filter_sql}
             ORDER BY l."time" DESC;
         """
     else:
@@ -1440,7 +1479,7 @@ async def get_labels_bulk(req: BulkLabelsRequest):
                 l.attester
             FROM public.labels AS l
             WHERE l.address = ANY($1)
-            {chain_filter_sql}
+            {filter_sql}
             ORDER BY l.address, l.chain_id, l.attester, l.tag_id, l."time" DESC;
         """
 
@@ -1516,6 +1555,8 @@ async def search_addresses_by_tag(
         params.append(chain_id)
         next_param += 1
 
+    next_param = add_private_attester_exclusion(where_clauses, params, next_param, "l.attester")
+
     # LIMIT is always the last parameter
     limit_param_num = next_param
     params.append(int(limit))
@@ -1585,23 +1626,29 @@ async def get_attester_analytics(
     Analytics summary: group by attester, count number of labels and unique attestations.
     """
 
-    chain_filter = ""
-    params = [int(limit)]
+    where_clauses = ["TRUE"]
+    params = []
+    next_param = 1
 
     if chain_id:
-        chain_filter = "AND chain_id = $1"
-        params = [chain_id, int(limit)]
+        where_clauses.append(f"chain_id = ${next_param}")
+        params.append(chain_id)
+        next_param += 1
+
+    next_param = add_private_attester_exclusion(where_clauses, params, next_param)
+
+    limit_param_num = next_param
+    params.append(int(limit))
 
     sql = f"""
         SELECT
             attester,
             COUNT(*) AS unique_attestations
         FROM public.attestations
-        WHERE TRUE
-        {chain_filter}
+        WHERE {' AND '.join(where_clauses)}
         GROUP BY attester
         ORDER BY unique_attestations DESC
-        LIMIT ${len(params)};
+        LIMIT ${limit_param_num};
     """
 
     async with app.state.db.acquire() as conn:
