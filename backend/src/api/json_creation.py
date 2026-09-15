@@ -3101,7 +3101,7 @@ class JSONCreation():
 
     def create_labels_json(self, type='full'):
         if type == 'full':
-            limit = 250000
+            limit = 10000
         elif type == 'quick':
             limit = 100
         else:

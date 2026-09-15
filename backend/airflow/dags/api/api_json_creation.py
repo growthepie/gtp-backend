@@ -102,7 +102,7 @@ def etl():
         json_creator.create_labels_sparkline_json()
         json_creator.create_projects_json() # also lives in backend/airflow/dags/oli/oli_oss_directory.py
 
-        json_creator.create_export_labels_parquet('top50k')
+        #json_creator.create_export_labels_parquet('top50k')
 
     @task()
     def run_oli_s3_export():
