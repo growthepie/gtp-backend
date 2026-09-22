@@ -1185,19 +1185,16 @@ async def get_trust_lists(
     async with app.state.db.acquire() as conn:
         # Case 1: direct UID lookup
         if uid:
-            where = ["uid = $1"]
-            params = [hex_to_bytes(uid)]
-            add_private_attester_exclusion(where, params, 2)
             row = await conn.fetchrow(
-                f"""
+                """
                 SELECT uid, "time", attester, recipient, revoked, is_offchain,
                        tx_hash, ipfs_hash, revocation_time, raw, last_updated_time,
                        schema_info, owner_name, attesters, attestations
                   FROM public.trust_lists
-                 WHERE {' AND '.join(where)}
+                 WHERE uid = $1
                  LIMIT 1;
                 """,
-                *params,
+                hex_to_bytes(uid),
             )
             if not row:
                 return TrustListQueryResponse(count=0, trust_lists=[])
@@ -1210,7 +1207,6 @@ async def get_trust_lists(
             where.append(f"attester = ${i}")
             params.append(hex_to_bytes(attester.lower()))
             i += 1
-        i = add_private_attester_exclusion(where, params, i)
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = "DESC" if order.lower() == "desc" else "ASC"
