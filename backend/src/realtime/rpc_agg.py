@@ -33,6 +33,8 @@ GAS_SWAP = 350000  # Gas for a swap operation (e.g., Uniswap)
 
 PRICE_UPDATE_INTERVAL = 1800  # 30 minutes in seconds
 COINGECKO_SIMPLE_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+COINGECKO_PRO_SIMPLE_PRICE_URL = "https://pro-api.coingecko.com/api/v3/simple/price"
+COINGECKO_API_KEY = os.getenv("COINGECKO_API")
 ETH_COINGECKO_ID = "ethereum"
 
 # Redis constants
@@ -822,21 +824,38 @@ class RtBackend:
                         self.http_session = aiohttp.ClientSession()
 
                     params = {"ids": ",".join(coingecko_ids), "vs_currencies": "usd"}
+                    data = None
+
                     async with self.http_session.get(COINGECKO_SIMPLE_PRICE_URL, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
-                            for coingecko_id in coingecko_ids:
-                                if coingecko_id in data and 'usd' in data[coingecko_id]:
-                                    price_usd = float(data[coingecko_id]['usd'])
-                                    self.token_prices_usd[coingecko_id] = price_usd
-                                    if coingecko_id == ETH_COINGECKO_ID:
-                                        self.eth_price_usd = price_usd
-                                        self.last_eth_price_update = current_time
-                                    logger.info(f"Updated {coingecko_id} price: ${price_usd:.6f}")
-                                else:
-                                    logger.error(f"Missing {coingecko_id} price in CoinGecko response")
                         else:
-                            logger.error(f"Failed to fetch CoinGecko prices: HTTP {response.status}")
+                            logger.warning(
+                                f"CoinGecko free tier returned HTTP {response.status}"
+                                + (", falling back to Pro API" if COINGECKO_API_KEY else "")
+                            )
+
+                    if data is None and COINGECKO_API_KEY:
+                        pro_headers = {"x-cg-pro-api-key": COINGECKO_API_KEY}
+                        async with self.http_session.get(
+                            COINGECKO_PRO_SIMPLE_PRICE_URL, params=params, headers=pro_headers
+                        ) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                            else:
+                                logger.error(f"Failed to fetch CoinGecko Pro prices: HTTP {response.status}")
+
+                    if data is not None:
+                        for coingecko_id in coingecko_ids:
+                            if coingecko_id in data and 'usd' in data[coingecko_id]:
+                                price_usd = float(data[coingecko_id]['usd'])
+                                self.token_prices_usd[coingecko_id] = price_usd
+                                if coingecko_id == ETH_COINGECKO_ID:
+                                    self.eth_price_usd = price_usd
+                                    self.last_eth_price_update = current_time
+                                logger.info(f"Updated {coingecko_id} price: ${price_usd:.6f}")
+                            else:
+                                logger.error(f"Missing {coingecko_id} price in CoinGecko response")
                 except Exception as e:
                     logger.error(f"Error updating CoinGecko prices: {str(e)}")
 

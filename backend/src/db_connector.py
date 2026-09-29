@@ -2641,15 +2641,19 @@ class DbConnector:
                         return []
 
         def get_realtime_rpcs_for_chain(self, origin_key: str):
-                """Return healthy, non-special RPCs suitable for realtime traffic."""
+                """Return healthy, non-special RPCs suitable for realtime traffic.
+
+                Unsynced endpoints are included but ranked lower, rather than
+                excluded outright, so a chain isn't left without any realtime
+                endpoints if none happen to be marked synced.
+                """
                 query = text("""
                         SELECT url
                         FROM sys_rpc_config
                         WHERE origin_key = :origin_key
                         AND active = true
-                        AND synced = true
                         AND COALESCE(special_use, false) = false
-                        ORDER BY realtime_use DESC NULLS LAST
+                        ORDER BY realtime_use DESC NULLS LAST, COALESCE(synced, false) DESC
                 """)
                 try:
                         with self.engine.connect() as connection:
