@@ -2639,6 +2639,26 @@ class DbConnector:
                         print(f"Error retrieving rpcs for {origin_key}.")
                         print(e)
                         return []
+
+        def get_realtime_rpcs_for_chain(self, origin_key: str):
+                """Return healthy, non-special RPCs suitable for realtime traffic."""
+                query = text("""
+                        SELECT url
+                        FROM sys_rpc_config
+                        WHERE origin_key = :origin_key
+                        AND active = true
+                        AND synced = true
+                        AND COALESCE(special_use, false) = false
+                        ORDER BY realtime_use DESC NULLS LAST
+                """)
+                try:
+                        with self.engine.connect() as connection:
+                                result = connection.execute(query, {"origin_key": origin_key})
+                                return [row[0] for row in result.fetchall()]
+                except Exception as e:
+                        print(f"Error retrieving realtime RPCs for {origin_key}.")
+                        print(e)
+                        return []
                 
         def get_block_by_date(self, table_name:str, date:datetime):
                 # Check if the table has a 'block_timestamp' column

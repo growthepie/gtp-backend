@@ -678,45 +678,45 @@ class RtBackend:
         """
         
         for chain_name, config in rpc_config.items():
-            primary_rpc = self.db_connector.get_special_use_rpc(chain_name, check_realtime=True)
-            fallback_rpcs = self.db_connector.get_all_rpcs_for_chain(chain_name)
+            realtime_rpcs = self.db_connector.get_realtime_rpcs_for_chain(chain_name)
             rpc_urls = [
                 url
-                for url in dict.fromkeys([primary_rpc, *fallback_rpcs])
+                for url in dict.fromkeys(realtime_rpcs)
                 if url and str(url).strip() and str(url).strip().lower() != "none"
             ]
+            emergency_rpc_urls = []
+            if chain_name == "ethereum" and config.get("enable_emergency_rpc", False):
+                emergency_rpc = self.db_connector.get_special_use_rpc(chain_name)
+                if emergency_rpc and emergency_rpc not in rpc_urls:
+                    emergency_rpc_urls.append(emergency_rpc)
 
-            if not rpc_urls:
+            if not rpc_urls and not emergency_rpc_urls:
                 logger.error(f"No RPC URL configured for {chain_name}, skipping initialization")
                 continue
             rpc_config[chain_name]['rpc_urls'] = rpc_urls
+            rpc_config[chain_name]['emergency_rpc_urls'] = emergency_rpc_urls
             rpc_config[chain_name]['active_rpc_index'] = 0
-            rpc_config[chain_name]['url'] = rpc_urls[0]
+            rpc_config[chain_name]['url'] = (rpc_urls or emergency_rpc_urls)[0]
             if len(rpc_urls) > 1:
                 logger.info(f"Configured {len(rpc_urls)} realtime RPC endpoints for {chain_name}")
+            if emergency_rpc_urls:
+                logger.info(f"Configured an emergency special-use RPC for {chain_name}")
 
         logger.info(f"Initialized a total of {len(rpc_config)} RPC endpoints")
         return rpc_config
 
-    async def _rotate_rpc_client(self, chain_name: str) -> bool:
-        """Rotate a chain to the next configured RPC endpoint and rebuild its client."""
+    async def _activate_rpc_client(self, chain_name: str, rpc_url: str, endpoint_index: int) -> bool:
+        """Activate a specific endpoint, rebuilding the client only when needed."""
         config = self.RPC_ENDPOINTS[chain_name]
-        rpc_urls = config.get("rpc_urls", [])
-        if len(rpc_urls) <= 1:
-            return False
-
         processor = self.processors.get(config["processors"])
         if not processor:
             logger.error(f"No processor found for {config['processors']} (chain: {chain_name})")
             return False
 
-        active_rpc_index = (config.get("active_rpc_index", 0) + 1) % len(rpc_urls)
-        config["active_rpc_index"] = active_rpc_index
-        config["url"] = rpc_urls[active_rpc_index]
-        self.blockchain_clients[chain_name] = await processor.initialize_client(config["url"])
-        logger.warning(
-            f"{chain_name}: rotated realtime RPC to endpoint {active_rpc_index + 1}/{len(rpc_urls)}"
-        )
+        if config.get("url") != rpc_url or chain_name not in self.blockchain_clients:
+            self.blockchain_clients[chain_name] = await processor.initialize_client(rpc_url)
+        config["active_rpc_index"] = endpoint_index
+        config["url"] = rpc_url
         return True
 
     async def _initialize_blockchain_clients(self) -> None:
@@ -873,17 +873,19 @@ class RtBackend:
                 logger.error(f"No processor found for {processor}")
                 return None
 
-            rpc_urls = config.get("rpc_urls") or ([config["url"]] if config.get("url") else [])
-            if not rpc_urls:
+            rpc_urls = config.get("rpc_urls", [])
+            emergency_rpc_urls = config.get("emergency_rpc_urls", [])
+            if not rpc_urls and not emergency_rpc_urls:
                 logger.error(f"No RPC URLs configured for {chain_name}")
                 return None
 
-            max_attempts = len(rpc_urls)
             receipt_failures = 0
             last_error = None
 
-            for attempt in range(max_attempts):
-                if attempt > 0 and not await self._rotate_rpc_client(chain_name):
+            # Always begin a cycle with the preferred non-special endpoint. This
+            # prevents a successful failover from making a paid endpoint sticky.
+            for attempt, rpc_url in enumerate(rpc_urls):
+                if not await self._activate_rpc_client(chain_name, rpc_url, attempt):
                     break
 
                 client = self.blockchain_clients.get(chain_name)
@@ -891,14 +893,13 @@ class RtBackend:
                     logger.error(f"No client found for {chain_name}")
                     return None
 
-                active_rpc_index = config.get("active_rpc_index", 0)
                 try:
                     block = await processor.fetch_latest_block(client, chain_name, calc_fees)
                     if block is not None:
                         if attempt > 0:
                             logger.info(
                                 f"{chain_name}: fetch succeeded after failover "
-                                f"on endpoint {active_rpc_index + 1}/{max_attempts}"
+                                f"on endpoint {attempt + 1}/{len(rpc_urls)}"
                             )
                         return block
                     last_error = "processor returned no block"
@@ -907,33 +908,55 @@ class RtBackend:
                     last_error = e
                     logger.warning(
                         f"{chain_name}: receipt fetch failed on endpoint "
-                        f"{active_rpc_index + 1}/{max_attempts}: {str(e)}"
+                        f"{attempt + 1}/{len(rpc_urls)}: {str(e)}"
                     )
                 except Exception as e:
                     last_error = e
                     logger.error(
                         f"{chain_name}: block fetch failed on endpoint "
-                        f"{active_rpc_index + 1}/{max_attempts}: {str(e)}"
+                        f"{attempt + 1}/{len(rpc_urls)}: {str(e)}"
                     )
 
-                if attempt < max_attempts - 1:
-                    logger.warning(f"{chain_name}: trying backup RPC endpoint {attempt + 2}/{max_attempts}")
+                if attempt < len(rpc_urls) - 1:
+                    logger.warning(f"{chain_name}: trying backup RPC endpoint {attempt + 2}/{len(rpc_urls)}")
 
-            if calc_fees and receipt_failures == max_attempts and max_attempts > 0:
+            # Receipt support is optional. Prefer degraded data from a normal RPC
+            # over spending paid emergency capacity solely to calculate fees.
+            if calc_fees and rpc_urls and receipt_failures == len(rpc_urls):
                 logger.warning(
-                    f"{chain_name}: all RPC endpoints failed receipt fetch; "
+                    f"{chain_name}: all normal RPC endpoints failed receipt fetch; "
                     "falling back to latest block without fee data"
                 )
-                client = self.blockchain_clients.get(chain_name)
-                if client:
+                if await self._activate_rpc_client(chain_name, rpc_urls[0], 0):
+                    client = self.blockchain_clients.get(chain_name)
                     try:
-                        return await processor.fetch_latest_block(client, chain_name, False)
+                        block = await processor.fetch_latest_block(client, chain_name, False)
+                        if block is not None:
+                            return block
                     except Exception as e:
                         last_error = e
                         logger.error(f"{chain_name}: fallback basic block fetch failed: {str(e)}")
 
+            for emergency_attempt, rpc_url in enumerate(emergency_rpc_urls):
+                logger.warning(f"{chain_name}: trying emergency special-use RPC")
+                endpoint_index = len(rpc_urls) + emergency_attempt
+                if not await self._activate_rpc_client(chain_name, rpc_url, endpoint_index):
+                    break
+                client = self.blockchain_clients.get(chain_name)
+                try:
+                    block = await processor.fetch_latest_block(client, chain_name, calc_fees)
+                    if block is not None:
+                        return block
+                    last_error = "processor returned no block"
+                except ReceiptFetchFailed as e:
+                    last_error = e
+                except Exception as e:
+                    last_error = e
+                    logger.error(f"{chain_name}: emergency RPC fetch failed: {str(e)}")
+
+            total_attempts = len(rpc_urls) + len(emergency_rpc_urls)
             logger.error(
-                f"{chain_name}: failed to fetch latest block after {max_attempts} RPC attempt(s). "
+                f"{chain_name}: failed to fetch latest block after {total_attempts} RPC attempt(s). "
                 f"Last error: {last_error}"
             )
             self.chain_data[chain_name]["errors"] += 1

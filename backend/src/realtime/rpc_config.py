@@ -8,6 +8,7 @@
 #   - `sleeper`: The time to wait between requests in seconds.
 #   - `calc_fees`: A boolean indicating whether to calculate fees for transactions on this chain.
 #   - `failover_on_receipt_failure`: If true, eth_getBlockReceipts failures trigger RPC failover before falling back to basic block data.
+#   - `enable_emergency_rpc`: If true, a special-use RPC may be used after normal fallbacks are exhausted.
 
 rpc_config = {
     ## L1
@@ -18,6 +19,7 @@ rpc_config = {
         "sleeper": 6,
         "calc_fees": True,
         "failover_on_receipt_failure": True,
+        "enable_emergency_rpc": True,
     },
     
     ## OP Stack chains
