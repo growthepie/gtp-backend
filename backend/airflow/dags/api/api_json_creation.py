@@ -34,7 +34,7 @@ def etl():
         
         try:
             json_creator.create_master_json(df)
-            json_creator.create_master_json(df, 'zircuit')  # private version for zircuit
+            #json_creator.create_master_json(df, 'zircuit')  # private version for zircuit
         except Exception as e:
             print(f"Error creating master JSON: {e}")
             send_discord_message(f"Error creating master JSON: {e}")
