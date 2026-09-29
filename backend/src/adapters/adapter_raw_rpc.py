@@ -162,6 +162,35 @@ class NodeAdapter(AbstractAdapterRaw):
                     # Increment error count to ensure proper tracking
                     rpc_errors[rpc_url] = rpc_errors.get(rpc_url, 0) + 1000  # Large number to ensure removal
 
+    def _get_latest_block_with_failover(self):
+        """
+        Retry fetching the latest block against the other configured RPCs when the
+        currently selected client (self.w3) fails. self.w3 is picked once at init time
+        based on a lightweight connectivity check, so it can still hit runtime issues
+        (e.g. rate limiting) that check_and_kick_slow_rpcs/manage_threads never see,
+        since those only run during the later multi-threaded block-range extraction.
+
+        Returns:
+            int: The latest block number from a working RPC, or None if all fail.
+        """
+        current_url = self.w3._w3.provider.endpoint_uri
+        for rpc_config in self.rpc_configs:
+            if rpc_config['url'] == current_url:
+                continue
+            try:
+                candidate = Web3CC(rpc_config)
+            except Exception as e:
+                print(f"Failed to connect to RPC URL: {rpc_config['url']} with error: {e}")
+                continue
+
+            latest_block = get_latest_block(candidate)
+            if latest_block is not None:
+                print(f"Switched to RPC URL: {rpc_config['url']} after failure on {current_url}")
+                self.w3 = candidate
+                return latest_block
+
+        return None
+
     def run(self, block_start, batch_size):
         """
         Runs the transaction extraction process, checking connections to the database and GCS.
@@ -186,6 +215,10 @@ class NodeAdapter(AbstractAdapterRaw):
         #     print("Successfully connected to GCS.")
 
         latest_block = get_latest_block(self.w3)
+        if latest_block is None:
+            print(f"Could not fetch the latest block from {self.w3._w3.provider.endpoint_uri}, trying other configured RPCs.")
+            latest_block = self._get_latest_block_with_failover()
+
         if latest_block is None:
             print("Could not fetch the latest block.")
             raise ValueError("Could not fetch the latest block.")
