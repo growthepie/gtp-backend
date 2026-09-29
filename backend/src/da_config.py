@@ -1,7 +1,6 @@
 from pydantic import BaseModel, HttpUrl, Field, field_validator, ValidationInfo
 from typing import Optional, List
-import zipfile
-import io
+from src.gtp_dna import get_gtp_dna_archive
 import json
 import requests
 import pickle
@@ -40,25 +39,15 @@ class DAConfig(BaseModel):
         return v
 
 def get_da_config_dict():
-    # Get the repository
-    repo_url = "https://github.com/growthepie/gtp-dna/tree/main/"
-    _, _, _, owner, repo_name, _, branch, *path = repo_url.split('/')
-
-    # Download directory as ZIP file
-    zip_url = f"https://github.com/{owner}/{repo_name}/archive/{branch}.zip"
-    response = requests.get(zip_url)
-    zip_content = io.BytesIO(response.content)
-
     da_config_dict = []
 
-    with zipfile.ZipFile(zip_content) as zip_ref:
-        root_path = 'gtp-dna-main/da_layers/'
+    with get_gtp_dna_archive() as zip_ref:
+        root_path = f"{zip_ref.namelist()[0].split('/')[0]}/da_layers/"
         nameslist = zip_ref.namelist()
         nameslist = [name for name in nameslist if name.startswith(root_path)]
 
-        ## only exact folders from nameslist
-        da_layers = [name.split('/')[2] for name in nameslist if name.endswith('/')]
-        da_layers = [da_layer for da_layer in da_layers if da_layer]
+        da_layers = [name.split('/')[-2] for name in nameslist
+                     if name.endswith('/main.json') and name.count('/') == root_path.count('/') + 1]
 
         for da_layer in da_layers:      
             da_layer_data = {}

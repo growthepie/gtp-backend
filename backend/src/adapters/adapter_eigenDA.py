@@ -4,6 +4,7 @@ import json
 import yaml
 
 from src.adapters.abstract_adapters import AbstractAdapter
+from src.gtp_dna import get_gtp_dna_file
 from src.misc.helper_functions import print_init, print_load, print_extract, convert_economics_mapping_into_df
 
 class AdapterEigenDA(AbstractAdapter):
@@ -53,9 +54,7 @@ class AdapterEigenDA(AbstractAdapter):
 
     def get_economics_mapping(self):
         # map namespace to origin_key for df, based on economics_mapping.yml
-        url = "https://raw.githubusercontent.com/growthepie/gtp-dna/refs/heads/main/economics_da/economics_mapping.yml"
-        response = requests.get(url)
-        data = yaml.load(response.text, Loader=yaml.FullLoader)
+        data = yaml.load(get_gtp_dna_file("economics_da/economics_mapping.yml"), Loader=yaml.FullLoader)
         map = convert_economics_mapping_into_df(data)
         map = map[map['da_layer'] == 'eigenda'][['origin_key', 'namespace']]
         return map

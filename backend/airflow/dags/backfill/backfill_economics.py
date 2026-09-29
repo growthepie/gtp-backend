@@ -22,20 +22,22 @@ def main():
     @task()
     def check_and_backfill():
         from src.misc.helper_functions import convert_economics_mapping_into_df
-        from github import Github
+        from github import Auth, Github
         from datetime import datetime, timedelta, timezone
         import pandas as pd
         import yaml
         import os
         from src.db_connector import DbConnector
         from src.adapters.adapter_dune import AdapterDune
+        from src.gtp_dna import get_gtp_dna_token
 
         # check if a new commit for the file economics_mapping.yml was made in the last 24 hours
         d = 1 # number of days to look back for commits
         repo_name = "growthepie/gtp-dna"
         file_path = "economics_da/economics_mapping.yml"
         branch = "main"
-        g = Github()
+        token = get_gtp_dna_token()
+        g = Github(auth=Auth.Token(token)) if token else Github()
         repo = g.get_repo(repo_name)
 
         commits = repo.get_commits(path=file_path, sha=branch)

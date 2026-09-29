@@ -60,15 +60,11 @@ def etl():
 
     @task()
     def run_economics_mapping():
-        import requests
         import yaml
         from src.db_connector import DbConnector
+        from src.gtp_dna import get_gtp_dna_file
 
-        # URL of the raw file from GitHub
-        url = "https://raw.githubusercontent.com/growthepie/gtp-dna/refs/heads/main/economics_da/economics_mapping.yml"
-        response = requests.get(url)
-
-        data = yaml.load(response.text, Loader=yaml.FullLoader)
+        data = yaml.load(get_gtp_dna_file("economics_da/economics_mapping.yml"), Loader=yaml.FullLoader)
         df = convert_economics_mapping_into_df(data)
 
         ## in column da_layer rename 'celestia' to 'da_celestia', 'L1' to 'da_ethereum_calldata', 'beacon' to 'da_ethereum_blobs'
@@ -95,7 +91,6 @@ def etl():
     run_economics_mapping()
     run_refresh_materialized_app_view()
 etl()
-
 
 
 

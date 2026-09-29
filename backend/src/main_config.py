@@ -1,8 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from typing import Optional, List, Dict, Any
 from src.db_connector import DbConnector
-import zipfile
-import io
+from src.gtp_dna import get_gtp_dna_archive
 import json
 import requests
 import pickle
@@ -105,25 +104,15 @@ class MainConfig(BaseModel):
         return v
 
 def get_main_config_dict():
-    # Get the repository
-    repo_url = "https://github.com/growthepie/gtp-dna/tree/main/"
-    _, _, _, owner, repo_name, _, branch, *path = repo_url.split('/')
-
-    # Download directory as ZIP file
-    zip_url = f"https://github.com/{owner}/{repo_name}/archive/{branch}.zip"
-    response = requests.get(zip_url)
-    zip_content = io.BytesIO(response.content)
-
     main_config_dict = []
 
-    with zipfile.ZipFile(zip_content) as zip_ref:
-        root_path = 'gtp-dna-main/chains/'
+    with get_gtp_dna_archive() as zip_ref:
+        root_path = f"{zip_ref.namelist()[0].split('/')[0]}/chains/"
         nameslist = zip_ref.namelist()
         nameslist = [name for name in nameslist if name.startswith(root_path)]
 
-        ## only exact folders from nameslist
-        chains = [name.split('/')[2] for name in nameslist if name.endswith('/')]
-        chains = [chain for chain in chains if chain]
+        chains = [name.split('/')[-2] for name in nameslist
+                  if name.endswith('/main.json') and name.count('/') == root_path.count('/') + 1]
 
         for chain in chains:      
             chain_data = {}

@@ -8,6 +8,7 @@ from starknet_py.net.full_node_client import FullNodeClient # Starknet w3 equiva
 from starknet_py.contract import Contract
 from src.adapters.abstract_adapters import AbstractAdapter
 from src.misc.adapter_SupplyReader import SupplyReaderAdapter
+from src.gtp_dna import get_gtp_dna_file
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 #!# Logic requires 'first_block_of_day' data to be available in fact_kpis.
@@ -28,12 +29,8 @@ class AdapterStablecoinSupply(AbstractAdapter):
         super().__init__("Stablecoin Adapter v2", adapter_params, db_connector)
         
         # Store stablecoin metadata and mapping
-        import requests
-        _url = "https://raw.githubusercontent.com/growthepie/gtp-dna/main/stables/stables_config_v2.py"
-        _response = requests.get(_url)
-        _response.raise_for_status()
         _config = {}
-        exec(_response.text, _config)
+        exec(get_gtp_dna_file("stables/stables_config_v2.py"), _config)
         self.address_mapping = _config['address_mapping']
         self.coin_mapping = _config['coin_mapping']
 
