@@ -132,6 +132,38 @@ def find_nearest_existing_block(w3, block_num, min_block, max_block, max_distanc
 
     return None, None
 
+def _gallop_lower_bound(w3, target_timestamp, max_block, max_block_timestamp, safe_get_block, initial_step=10_000):
+    """
+    Exponentially search backward from the chain tip for a block whose timestamp
+    is at or before target_timestamp, to use as a binary search's lower bound.
+
+    Backfills only ever target a recent date range, but a plain binary search
+    starting at block 0 always probes the chain's numerical midpoint first -
+    ancient history that many non-archive RPCs don't retain, even though they
+    happily serve the (relevant, recent) blocks a backfill actually needs.
+    Galloping backward from the tip keeps the search near recent blocks for
+    recent targets, while still reaching all the way back to genesis - just
+    like a plain binary search would - if the target really is that old.
+    """
+    if target_timestamp >= max_block_timestamp:
+        return max_block
+
+    high = max_block
+    step = initial_step
+    while high > 0:
+        low = max(0, high - step)
+        block = safe_get_block(low)
+        if block is None:
+            low, block = find_nearest_existing_block(w3, low, 0, max_block)
+        if block is None:
+            break
+        if block.timestamp <= target_timestamp:
+            return low
+        high = low
+        step *= 2
+
+    return 0
+
 def find_first_block_of_day(w3, target_timestamp):
     """
     Finds the first block of the day based on a target timestamp using a binary search.
@@ -144,9 +176,8 @@ def find_first_block_of_day(w3, target_timestamp):
     Returns:
         int: The block number corresponding to the first block of the day.
     """
-    min_block = 0
     max_block = w3.eth.block_number
-    
+
     def safe_get_block(block_num):
         """Safely get a block, handling cases where the block doesn't exist."""
         try:
@@ -156,7 +187,13 @@ def find_first_block_of_day(w3, target_timestamp):
                 print(f"Block {block_num} (0x{block_num:x}) not found: {e}")
                 return None
             raise
-    
+
+    tip_block = safe_get_block(max_block)
+    min_block = (
+        _gallop_lower_bound(w3, target_timestamp, max_block, tip_block.timestamp, safe_get_block)
+        if tip_block is not None else 0
+    )
+
     while min_block <= max_block:
         mid_block = (min_block + max_block) // 2
         
@@ -210,8 +247,12 @@ def find_last_block_of_day(w3, target_timestamp):
                 return None
             raise
 
-    min_block = 0
     max_block = w3.eth.block_number
+    tip_block = safe_get_block(max_block)
+    min_block = (
+        _gallop_lower_bound(w3, end_of_day_timestamp, max_block, tip_block.timestamp, safe_get_block)
+        if tip_block is not None else 0
+    )
     while min_block <= max_block:
         mid_block = (min_block + max_block) // 2
         
