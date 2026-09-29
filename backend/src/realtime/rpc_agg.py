@@ -664,12 +664,25 @@ class RtBackend:
         """Clean up resources."""
         if self.http_session:
             await self.http_session.close()
-        
+
         if self.redis_client:
             await self.redis_client.close()
-            
-        # Note: Starknet clients are just URLs, no cleanup needed
-        # Only close actual HTTP clients (for EVM processors, Web3 handles this)
+
+        # Starknet clients are just URLs, no cleanup needed. EVM clients hold
+        # their own aiohttp session (AsyncHTTPProvider) that must be closed
+        # explicitly via disconnect() - Web3 does not do this on GC.
+        for client in self.blockchain_clients.values():
+            await self._close_blockchain_client(client)
+
+    @staticmethod
+    async def _close_blockchain_client(client: Any) -> None:
+        """Best-effort close of a blockchain client's underlying network session."""
+        disconnect = getattr(getattr(client, "provider", None), "disconnect", None)
+        if callable(disconnect):
+            try:
+                await disconnect()
+            except Exception as e:
+                logger.warning(f"Error disconnecting stale RPC client: {str(e)}")
 
     def _initialize_rpc_endpoints(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -716,7 +729,10 @@ class RtBackend:
             return False
 
         if config.get("url") != rpc_url or chain_name not in self.blockchain_clients:
+            old_client = self.blockchain_clients.get(chain_name)
             self.blockchain_clients[chain_name] = await processor.initialize_client(rpc_url)
+            if old_client is not None:
+                await self._close_blockchain_client(old_client)
         config["active_rpc_index"] = endpoint_index
         config["url"] = rpc_url
         return True
