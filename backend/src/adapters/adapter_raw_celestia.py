@@ -73,7 +73,7 @@ class AdapterCelestia(AbstractAdapterRaw):
             attempt = 0
             while attempt < retry_limit:
                 try:
-                    self.fetch_and_process_range(block_start, block_end, self.chain, self.table_name, self.bucket_name, self.db_connector)
+                    self.fetch_and_process_range(block_start, block_end, self.chain, self.table_name, self.bucket_name, self.db_connector, rpc_endpoint)
                     break
                 except Exception as e:
                     attempt += 1
@@ -85,18 +85,28 @@ class AdapterCelestia(AbstractAdapterRaw):
                 time.sleep(10)
                 block_range_queue.put((block_start, block_end))
                    
-    def fetch_data_for_range(self, block_start, block_end):
+    def fetch_data_for_range(self, block_start, block_end, preferred_endpoint=None):
         df = pd.DataFrame()
         for block_number in range(block_start, block_end + 1):
             #print(f"Fetching data for block {block_number}")
-            block_df = self.retrieve_block_data(block_number)
+            block_df = self.retrieve_block_data(block_number, preferred_endpoint)
             df = pd.concat([df, block_df], ignore_index=True)
         return df
 
-    def request_rpc(self, payload, headers):
-        for rpc_endpoint in self.rpc_list:
+    def request_rpc(self, payload, headers, preferred_endpoint=None):
+        # Try the endpoint this worker thread was assigned first, so a single dead
+        # RPC doesn't get hammered on every call from every thread - each thread
+        # only falls through to the rest of the list when its own pick is down.
+        if preferred_endpoint and preferred_endpoint in self.rpc_list:
+            ordered_endpoints = [preferred_endpoint] + [
+                rpc for rpc in self.rpc_list if rpc != preferred_endpoint
+            ]
+        else:
+            ordered_endpoints = self.rpc_list
+
+        for rpc_endpoint in ordered_endpoints:
             try:
-                response = requests.post(rpc_endpoint, json=payload, headers=headers)
+                response = requests.post(rpc_endpoint, json=payload, headers=headers, timeout=10)
                 if response.status_code == 200:
                     response_json = response.json()
                     return response_json
@@ -124,14 +134,14 @@ class AdapterCelestia(AbstractAdapterRaw):
         print("Failed to retrieve the latest block number.")
         return None
 
-    def retrieve_block_data(self, block_number):
+    def retrieve_block_data(self, block_number, preferred_endpoint=None):
         df = pd.DataFrame()
         page = 1
         total_tx_count = 0  # Track total transactions
         all_txs = []  # Store all transactions
 
         while True:
-            tx_search = self.fetch_block_transaction_details(block_number, page)
+            tx_search = self.fetch_block_transaction_details(block_number, page, preferred_endpoint)
 
             # Handle case where no transactions are found or the RPC request fails
             if not tx_search or 'result' not in tx_search or 'txs' not in tx_search['result']:
@@ -143,7 +153,7 @@ class AdapterCelestia(AbstractAdapterRaw):
             total_tx_count += tx_count
             all_txs.extend(txs)  # Store transactions from each page
 
-            df = pd.concat([df, self.prep_dataframe_celestia(tx_search)], ignore_index=True)
+            df = pd.concat([df, self.prep_dataframe_celestia(tx_search, preferred_endpoint)], ignore_index=True)
 
             # Stop fetching pages if fewer than 100 transactions are returned
             if tx_count < 100:
@@ -166,7 +176,7 @@ class AdapterCelestia(AbstractAdapterRaw):
         
         return df
      
-    def get_block_timestamp(self, block_number):
+    def get_block_timestamp(self, block_number, preferred_endpoint=None):
         headers = {'Content-Type': 'application/json'}
         payload = {
             "jsonrpc": "2.0",
@@ -174,13 +184,13 @@ class AdapterCelestia(AbstractAdapterRaw):
             "params": [str(block_number)],
             "id": 1
         }
-        response = self.request_rpc(payload, headers)
+        response = self.request_rpc(payload, headers, preferred_endpoint)
         if response and 'result' in response and 'block' in response['result'] and 'header' in response['result']['block']:
             return response['result']['block']['header']['time']
         print(f"Failed to fetch block timestamp for block {block_number}.")
         return None
 
-    def fetch_block_transaction_details(self, block_number, page=1):
+    def fetch_block_transaction_details(self, block_number, page=1, preferred_endpoint=None):
         headers = {'Content-Type': 'application/json'}
         payload = {
             "jsonrpc": "2.0",
@@ -194,15 +204,15 @@ class AdapterCelestia(AbstractAdapterRaw):
             },
             "id": 1
         }
-        
-        tx_search = self.request_rpc(payload, headers)
+
+        tx_search = self.request_rpc(payload, headers, preferred_endpoint)
         if tx_search and 'result' in tx_search and 'txs' in tx_search['result']:
             return tx_search
         else:
             print(f"Failed to fetch transaction details for block {block_number}.")
             return False, {"error": "No transactions found or RPC request failed"}
     
-    def prep_dataframe_celestia(self, tx):
+    def prep_dataframe_celestia(self, tx, preferred_endpoint=None):
         if tx['result']['txs'] == None or tx['result']['txs'] == []:
             print('No transactions found in this block!')
             return pd.DataFrame()
@@ -210,7 +220,7 @@ class AdapterCelestia(AbstractAdapterRaw):
         data = []
         txs = tx['result']['txs']
         block = txs[0]['height']
-        timestamp = self.get_block_timestamp(block)
+        timestamp = self.get_block_timestamp(block, preferred_endpoint)
         for trx in txs:
             decoded_trx = decode_base64(trx)
             row = {}
@@ -258,13 +268,13 @@ class AdapterCelestia(AbstractAdapterRaw):
 
         return pd.DataFrame(data)
 
-    def fetch_and_process_range(self, current_start, current_end, chain, table_name, bucket_name, db_connector):
+    def fetch_and_process_range(self, current_start, current_end, chain, table_name, bucket_name, db_connector, preferred_endpoint=None):
         base_wait_time = 5   # Base wait time in seconds
         print(f"...processing blocks {current_start} to {current_end}...")
         while True:
             try:
                 # Fetching Celestia block data for the specified range
-                df = self.fetch_data_for_range(current_start, current_end)
+                df = self.fetch_data_for_range(current_start, current_end, preferred_endpoint)
 
                 # Check if df is None or empty, and return early without further processing.
                 if df is None or df.empty:
@@ -295,7 +305,7 @@ class AdapterCelestia(AbstractAdapterRaw):
 
             except Exception as e:
                 print(f"Error processing blocks {current_start} to {current_end}: {e}")
-                base_wait_time = handle_retry_exception(current_start, current_end, base_wait_time, self.rpc_list[0])
+                base_wait_time = handle_retry_exception(current_start, current_end, base_wait_time, preferred_endpoint or self.rpc_list[0])
 
     def process_missing_blocks(self, missing_block_ranges, batch_size):
         # Convert list of ranges into a queue of block ranges for batch processing
