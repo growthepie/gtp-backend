@@ -590,8 +590,8 @@ def etl():
             send_discord_message(f"<@790276642660548619> The economics mapping function for **{row.l2}** has changed. Details: settlement on {row.settlement_layer}, {row.no_of_trx} trx per day, from_address: {row.from_address}, to_address: {row.to_address}, method: {row.method}.", os.getenv('DISCORD_ALERTS'))
 
         from src.claude import ClaudeAgent, ClaudeTask
-        from src.gtp_dna import get_gtp_dna_token
-        agent = ClaudeAgent(token=get_gtp_dna_token(), repo='growthepie/gtp-dna', workflow='claude-pr.yml')
+        from src.gtp_dna import get_gtp_dna_dispatch_token
+        agent = ClaudeAgent(token=get_gtp_dna_dispatch_token(), repo='growthepie/gtp-dna', workflow='claude-pr.yml')
 
         changed_chains = "\n".join(
             f"- {row.l2}: settlement_layer={row.settlement_layer}, from_address={row.from_address}, to_address={row.to_address}, method={row.method}"

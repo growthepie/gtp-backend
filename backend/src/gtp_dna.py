@@ -16,6 +16,10 @@ def get_gtp_dna_token():
     return os.getenv("GITHUB_TOKEN") or os.getenv("GITHUB_GROWTHEPAI_TOKEN")
 
 
+def get_gtp_dna_dispatch_token():
+    return os.getenv("GITHUB_GROWTHEPAI_TOKEN") or os.getenv("GITHUB_TOKEN")
+
+
 def _get(url, accept, timeout):
     headers = {"Accept": accept, "X-GitHub-Api-Version": "2022-11-28"}
     token = get_gtp_dna_token()
