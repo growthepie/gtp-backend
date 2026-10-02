@@ -10,6 +10,7 @@ import logging
 import re
 import sqlite3
 import time
+from decimal import Decimal, InvalidOperation
 from contextlib import contextmanager
 from pathlib import Path
 from xml.etree import ElementTree
@@ -130,6 +131,9 @@ def hex_value(value, length):
 
 
 def make_label(verification, deployment, compilation, verifier_map):
+    address = hex_value(deployment["address"], 20)
+    if address is None:
+        raise ValueError("Missing contract address")
     chain = int(deployment["chain_id"])
     if chain <= 0 or not (verification["creation_match"] or verification["runtime_match"]):
         raise ValueError("Invalid chain or verification without a bytecode match")
@@ -144,18 +148,34 @@ def make_label(verification, deployment, compilation, verifier_map):
         tags["code_language"] = language
     if compilation.get("compiler") and compilation.get("version"):
         tags["code_compiler"] = f"{compilation['compiler']}-{compilation['version']}"
+    omitted = {}
     for source, target, length in (("transaction_hash", "deployment_tx", 32), ("deployer", "deployer_address", 20)):
-        if deployment.get(source) is not None:
-            tags[target] = hex_value(deployment[source], length)
-    if deployment.get("block_number") is not None:
-        block = int(deployment["block_number"])
-        if block < 0:
-            raise ValueError("Negative deployment block")
-        tags["deployment_block"] = block
+        value = deployment.get(source)
+        if value is not None:
+            try:
+                tags[target] = hex_value(value, length)
+            except ValueError:
+                # VerA can export empty bytea (cached as "0x") for unknown
+                # deployment metadata. Never pad it into a fabricated address.
+                omitted[source] = "0x" + bytes(value).hex() if isinstance(value, (bytes, bytearray, memoryview)) else value
+    value = deployment.get("block_number")
+    if value is not None:
+        try:
+            block = Decimal(str(value))
+            if not block.is_finite() or block < 0 or block != block.to_integral_value():
+                raise ValueError("Unknown or invalid deployment block")
+            tags["deployment_block"] = int(block)
+        except (InvalidOperation, ValueError):
+            # In particular, -1 is an unknown-block sentinel in the export.
+            omitted["block_number"] = value
     tags["_source"] = "https://verifieralliance.org/"
     # No standard tags exist for match quality, verification time, or compilation IDs.
-    tags["_comment"] = json.dumps({"verifier_alliance": verification}, default=str, sort_keys=True)
-    return {"address": hex_value(deployment["address"], 20), "chain_id": f"eip155:{chain}", "tags": tags}
+    provenance = {"verifier_alliance": verification}
+    if omitted:
+        provenance["omitted_deployment_fields"] = omitted
+        LOG.debug("Omitted unavailable/invalid deployment metadata for %s: %s", deployment["id"], list(omitted))
+    tags["_comment"] = json.dumps(provenance, default=str, sort_keys=True)
+    return {"address": address, "chain_id": f"eip155:{chain}", "tags": tags}
 
 
 class RangeReader(io.RawIOBase):
@@ -370,7 +390,7 @@ def sign_labels(oli, labels):
 def flush_outbox(state, oli):
     row = state.db.execute("SELECT payload, labels FROM outbox WHERE id=1").fetchone()
     if not row:
-        return
+        return {"submitted": 0, "duplicates": 0}
     payload, labels = map(json.loads, row)
     allowed = oli.tag_definitions["source_code_verified"]["schema"]["enum"]
     if any(label["tags"].get("source_code_verified") not in allowed for label in labels):
@@ -386,6 +406,7 @@ def flush_outbox(state, oli):
             [(label["chain_id"], label["address"], tag, json_value(value, tag))
              for label in labels for tag, value in label["tags"].items() if not tag.startswith("_")])
         state.db.execute("DELETE FROM outbox WHERE id=1")
+    return {"submitted": result.get("accepted", 0), "duplicates": result.get("duplicates", 0)}
 
 
 @contextmanager
@@ -407,8 +428,8 @@ def locked_state(directory):
 
 def sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifier_map=None, notify=None):
     try:
-        return _sync(directory, engine, oli, dry_run=dry_run, max_batches=max_batches,
-                     verifier_map=verifier_map, notify=notify)
+        result = _sync(directory, engine, oli, dry_run=dry_run, max_batches=max_batches,
+                       verifier_map=verifier_map, notify=notify)
     except sqlite3.DatabaseError as exc:
         if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL:
             if notify and not dry_run:
@@ -425,6 +446,24 @@ def sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifier
         if "outbox" in str(exc) and notify and not dry_run:
             notify(f"Verifier Alliance sync BLOCKED: {exc}")
         raise
+    if not dry_run:
+        status = "Run limit reached; more work remains." if result["bounded"] else "Caught up with the export."
+        message = (f"VERA sync complete: {result['submitted']:,} new attestations submitted to OLI; "
+                   f"{result['scanned']:,} verification rows checked. {status}")
+        if result["duplicates"]:
+            message += f" {result['duplicates']:,} duplicate submissions excluded from the new count."
+        LOG.info(message)
+        if notify:
+            try:
+                notify(message)
+            except Exception:
+                # Work is already committed. Do not restart ingestion merely
+                # because its completion message could not be delivered.
+                LOG.exception("VERA completion notification failed; sync itself completed")
+                result["completion_notification_sent"] = False
+            else:
+                result["completion_notification_sent"] = True
+    return result
 
 
 def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifier_map=None, notify=None):
@@ -438,7 +477,8 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
     aliases = verifier_map or {}
     if not dry_run and oli is None:
         raise ValueError("Live sync requires an OLI client")
-    stats = {"scanned": 0, "attestations": 0, "tags": 0, "unknown_verifiers": {}}
+    stats = {"scanned": 0, "attestations": 0, "tags": 0, "unknown_verifiers": {},
+             "submitted": 0, "duplicates": 0}
     with locked_state(directory) as state, requests.Session() as session:
         allowed = allowed_verifiers(session, oli)
         # List and check verifier roles first, before any costly cache construction.
@@ -446,7 +486,9 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
         verifier_map = preflight_verifiers(state, session, verified_files, allowed, aliases,
                                            None if dry_run else notify)
         if not dry_run:
-            flush_outbox(state, oli)
+            submission = flush_outbox(state, oli)
+            stats["submitted"] += submission["submitted"]
+            stats["duplicates"] += submission["duplicates"]
             for _ in range(25):
                 if not reconcile_receipts(state, engine):
                     break
@@ -495,7 +537,9 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
                     with state.db:
                         state.db.execute("INSERT INTO outbox VALUES (1, ?, ?)",
                                          (json.dumps(payload), json.dumps(missing)))
-                    flush_outbox(state, oli)
+                    submission = flush_outbox(state, oli)
+                    stats["submitted"] += submission["submitted"]
+                    stats["duplicates"] += submission["duplicates"]
                 if not dry_run:
                     with state.db:
                         state.checkpoint(file, count)

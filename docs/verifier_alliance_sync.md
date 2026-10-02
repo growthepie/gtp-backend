@@ -245,6 +245,28 @@ up to 5M rows/run, subject to the task's 20-hour timeout and actual throughput.
 Retries resume from committed checkpoints. Keep daily scheduling enabled afterward;
 no separate DAG or backfill-to-daily mode switch is needed.
 
+### Run completion message
+
+Every successfully completed live `sync()` invocation sends one short Discord
+message through the supplied `notify` callback (already wired in the DAG and the
+live standalone script). This includes runs ending at `max_batches`, not just
+runs that exhaust the export. Example:
+
+> VERA sync complete: 41 new attestations submitted to OLI; 44,000 verification rows checked. Run limit reached; more work remains.
+
+The `submitted` result counts OLI's API `accepted` responses, including accepted
+outbox replay submissions. API `duplicates` are counted separately and excluded
+from the new-attestation count. The existing `attestations` count describes
+candidate payloads, and `tags` counts substantive values including the required
+verifier field; neither is a count of newly discovered addresses.
+
+Counts are per invocation, not accumulated across prior failed attempts. If a
+previous request was accepted but its response was lost, a replay is a duplicate
+and is not counted as newly accepted in this invocation. Dry runs and failed runs
+do not send a success message. A completion-webhook failure is logged and returns
+`completion_notification_sent: false`; it does not fail/restart committed ingestion.
+Operational blocking alerts retain their existing retry behavior.
+
 ## Labels
 
 The importer emits `source_code_verified`, `is_contract`, `contract_name`,
@@ -258,6 +280,15 @@ Chain IDs come directly from the dataset as `eip155:<chain_id>`; this includes
 chains outside growthepie's tracked set. Verification creation time is **not** a
 deployment date. No ownership, categories, proxy status, or token standards are
 inferred from source code.
+
+Some public export rows represent unknown deployers as empty bytea (`0x` after
+caching) and unknown deployment blocks as `-1`. These optional fields are omitted
+from labels instead of aborting the batch. Invalid optional deployer/transaction
+hex and non-integral or non-finite block numbers are also omitted; their original
+values are retained in `_comment.omitted_deployment_fields` for inspection when
+an attestation is emitted. Valid fields, including the verifier, are retained.
+The contract address itself remains mandatory and strictly validated. Existing
+cached rows require no migration or re-download for this handling.
 
 `_source` links to Verifier Alliance. `_comment` records verification ID, verifier
 role, creation timestamp, compilation/deployment IDs, and creation/runtime and

@@ -53,8 +53,41 @@ class VerifierAllianceTests(unittest.TestCase):
             va.make_label({**self.verification, "created_by": "routescan"}, self.deployment, self.compilation, {})
 
     def test_invalid_address_fails(self):
-        with self.assertRaises(ValueError):
-            va.make_label(self.verification, {**self.deployment, "address": b"short"}, self.compilation, {"sourcify": "sourcify"})
+        for address in (b"short", b"", "0x", None):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                va.make_label(self.verification, {**self.deployment, "address": address}, self.compilation, {"sourcify": "sourcify"})
+
+    def test_unknown_deployment_metadata_preserves_verification(self):
+        for deployer in (b"", "0x", "\\x", "", None):
+            for block in (-1, "-1"):
+                with self.subTest(deployer=deployer, block=block):
+                    label = va.make_label(self.verification, {**self.deployment, "deployer": deployer, "block_number": block},
+                                          self.compilation, {"sourcify": "sourcify"})
+                    self.assertNotIn("deployer_address", label["tags"])
+                    self.assertNotIn("deployment_block", label["tags"])
+                    self.assertEqual(label["tags"]["source_code_verified"], "sourcify")
+                    self.assertEqual(label["tags"]["deployment_tx"], "0x" + "34" * 32)
+                    omitted = json.loads(label["tags"]["_comment"])["omitted_deployment_fields"]
+                    self.assertEqual(omitted["block_number"], block)
+
+    def test_bad_optional_hex_is_omitted_without_padding(self):
+        label = va.make_label(self.verification, {**self.deployment, "deployer": "0x1234", "transaction_hash": "0x"},
+                              self.compilation, {"sourcify": "sourcify"})
+        self.assertNotIn("deployer_address", label["tags"])
+        self.assertNotIn("deployment_tx", label["tags"])
+        self.assertEqual(label["tags"]["deployment_block"], 0)
+        self.assertEqual(json.loads(label["tags"]["_comment"])["omitted_deployment_fields"],
+                         {"deployer": "0x1234", "transaction_hash": "0x"})
+
+    def test_optional_block_does_not_truncate_or_attest_invalid_values(self):
+        for value in ("NaN", "Infinity", "1.5", "unknown"):
+            with self.subTest(value=value):
+                label = va.make_label(self.verification, {**self.deployment, "block_number": value},
+                                      self.compilation, {"sourcify": "sourcify"})
+                self.assertNotIn("deployment_block", label["tags"])
+        label = va.make_label(self.verification, {**self.deployment, "block_number": "12.0"},
+                              self.compilation, {"sourcify": "sourcify"})
+        self.assertEqual(label["tags"]["deployment_block"], 12)
 
     def test_prior_sourcify_values_and_same_batch_duplicates_are_skipped(self):
         existing = {(self.label["chain_id"], self.label["address"], tag, va.json_value(value))
@@ -91,7 +124,8 @@ class VerifierAllianceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             va.flush_outbox(self.state, client)
         response.json.return_value = {"accepted": 0, "duplicates": 1, "failed_validation": []}
-        va.flush_outbox(self.state, client)
+        counts = va.flush_outbox(self.state, client)
+        self.assertEqual(counts, {"submitted": 0, "duplicates": 1})
         self.assertTrue(all(call.args[0] == signed for call in client.api.post_bulk_attestations.call_args_list))
         self.assertEqual(self.state.db.execute("SELECT count(*) FROM outbox").fetchone()[0], 0)
         self.assertEqual(va.missing_labels([self.label], set(), self.state), [])
@@ -133,19 +167,27 @@ class VerifierAllianceTests(unittest.TestCase):
             yield [data[table]]
         client = Mock(tag_definitions=DEFINITIONS)
         client.api.post_bulk_attestations.return_value.json.return_value = {"accepted": 1, "duplicates": 0}
+        notify = Mock()
         with tempfile.TemporaryDirectory() as directory, patch.object(va, "list_files", side_effect=listing), \
                 patch.object(va, "parquet_batches", side_effect=batches), \
                 patch.object(va, "existing_labels", side_effect=lambda *args: set()), \
                 patch.object(va, "sign_labels", return_value=[{"uid": "stable"}]) as sign:
-            result = va.sync(directory, Mock(), dry_run=True)
+            result = va.sync(directory, Mock(), dry_run=True, notify=notify)
             self.assertEqual(result["attestations"], 1)
+            self.assertEqual(result["submitted"], 0)
+            notify.assert_not_called()
             sign.assert_not_called()
             with sqlite_connection(directory) as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM files WHERE key LIKE '%verified_contracts%'").fetchone()[0], 0)
-            result = va.sync(directory, Mock(), client, dry_run=False)
+            result = va.sync(directory, Mock(), client, dry_run=False, notify=notify)
             self.assertEqual(result["attestations"], 1)
-            result = va.sync(directory, Mock(), client, dry_run=False)
+            self.assertEqual(result["submitted"], 1)
+            notify.assert_called_once()
+            self.assertIn("1 new attestations", notify.call_args.args[0])
+            self.assertIn("Caught up", notify.call_args.args[0])
+            result = va.sync(directory, Mock(), client, dry_run=False, notify=notify)
             self.assertEqual(result["scanned"], 0)
+            self.assertIn("0 new attestations", notify.call_args.args[0])
             client.api.post_bulk_attestations.assert_called_once()
 
     def test_missing_join_does_not_advance_verification_checkpoint(self):
@@ -338,6 +380,35 @@ class VerifierAllianceTests(unittest.TestCase):
                 va.sync("unused", Mock(), Mock(), dry_run=False, notify=notify)
         notify.assert_called_once()
         self.assertIn("90 GB", notify.call_args.args[0])
+
+    def test_bounded_completion_reports_accepted_not_candidate_count(self):
+        stats = {"scanned": 500, "attestations": 20, "submitted": 7, "duplicates": 13, "bounded": True}
+        notify = Mock()
+        with patch.object(va, "_sync", return_value=stats):
+            result = va.sync("unused", Mock(), Mock(), dry_run=False, notify=notify)
+        notify.assert_called_once()
+        message = notify.call_args.args[0]
+        self.assertIn("7 new attestations", message)
+        self.assertIn("13 duplicate submissions excluded", message)
+        self.assertIn("more work remains", message)
+        self.assertTrue(result["completion_notification_sent"])
+
+    def test_completion_webhook_failure_does_not_retry_completed_ingestion(self):
+        stats = {"scanned": 500, "submitted": 7, "duplicates": 0, "bounded": False}
+        with patch.object(va, "_sync", return_value=stats) as run, \
+                self.assertLogs(va.LOG, level="ERROR"):
+            result = va.sync("unused", Mock(), Mock(), dry_run=False,
+                             notify=Mock(side_effect=RuntimeError("Discord offline")))
+        run.assert_called_once()
+        self.assertFalse(result["completion_notification_sent"])
+        self.assertEqual(result["submitted"], 7)
+
+    def test_failed_sync_never_sends_success_message(self):
+        notify = Mock()
+        with patch.object(va, "_sync", side_effect=RuntimeError("failed batch")):
+            with self.assertRaises(RuntimeError):
+                va.sync("unused", Mock(), Mock(), dry_run=False, notify=notify)
+        notify.assert_not_called()
 
 
 def sqlite_connection(directory):
