@@ -1,0 +1,59 @@
+{
+  "status": "validated_against_published_OLI_tag_schemas_not_submitted",
+  "schema_checked_on": "2026-10-02",
+  "created_by_counts": {
+    "sourcify": 33333132,
+    "blockscout": 7033354,
+    "routescan": 3368769
+  },
+  "candidate_labels": [
+    {
+      "address": "0x4bcfb10465a8d22f0a047df3afa8ee06cbcc8e13",
+      "chain_id": "eip155:43114",
+      "tags": {
+        "is_contract": true,
+        "source_code_verified": "routescan",
+        "contract_name": "StrategyPngSnobPngLp",
+        "code_language": "solidity",
+        "code_compiler": "solc 0.6.7+commit.b8d736ae",
+        "deployment_tx": "0x87b919a3efd7eef52821180aeffd6aa561394f9a0646e0c69697896e2fc0b6fe",
+        "deployer_address": "0x0507d42b80d52d3495d625a03ecffa4a30c2061b",
+        "deployment_block": 1459815,
+        "_source": "https://verifieralliance.org/",
+        "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"528b20c9-ce22-4006-978d-92264766644c\", \"created_at\": \"2025-02-28 16:31:43.046408\", \"created_by\": \"routescan\", \"creation_match\": true, \"creation_metadata_match\": false, \"deployment_id\": \"50b72bae-690a-4ef0-b1e9-8170a382b4d4\", \"id\": 94756, \"runtime_match\": true, \"runtime_metadata_match\": false}}"
+      }
+    },
+    {
+      "address": "0x7ecdd54f6a17eb92c0166ad43a73d58ffc3d6c4e",
+      "chain_id": "eip155:43114",
+      "tags": {
+        "is_contract": true,
+        "source_code_verified": "routescan",
+        "contract_name": "PangolinRouter",
+        "code_language": "solidity",
+        "code_compiler": "solc 0.6.6+commit.6c089d02",
+        "deployment_tx": "0x6e10316a2d249fffe074dfdfb069587a67bc31349724270ee960ea453d65b996",
+        "deployer_address": "0x136a457ec9ad2851f263ded4291623df64d4ecfb",
+        "deployment_block": 1685118,
+        "_source": "https://verifieralliance.org/",
+        "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"b49fa70f-687a-454f-939a-7713cb6bc62b\", \"created_at\": \"2025-02-28 16:31:43.440577\", \"created_by\": \"routescan\", \"creation_match\": true, \"creation_metadata_match\": false, \"deployment_id\": \"65b62e5c-b7c7-4535-a121-5c02b8b7cf66\", \"id\": 94757, \"runtime_match\": true, \"runtime_metadata_match\": false}}"
+      }
+    },
+    {
+      "address": "0xc2457f6eb241c891ef74e02ccd50e5459c2e28ea",
+      "chain_id": "eip155:43114",
+      "tags": {
+        "is_contract": true,
+        "source_code_verified": "routescan",
+        "contract_name": "SporeMarketv1",
+        "code_language": "solidity",
+        "code_compiler": "solc 0.8.0+commit.c7dfd78e",
+        "deployment_tx": "0x7b994afbd9ab99182eed4d303241762492e8ec62b21da370931b53f64c74da9e",
+        "deployer_address": "0x88dd784dfaab1a7752d2cc81071fcd12c1c4e1db",
+        "deployment_block": 1747108,
+        "_source": "https://verifieralliance.org/",
+        "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"3db5956c-793e-4270-b91f-7e202d2f022f\", \"created_at\": \"2025-02-28 16:31:47.523064\", \"created_by\": \"routescan\", \"creation_match\": true, \"creation_metadata_match\": false, \"deployment_id\": \"8b62a4d4-e880-4960-a321-45de68de9387\", \"id\": 94760, \"runtime_match\": true, \"runtime_metadata_match\": false}}"
+      }
+    }
+  ]
+}

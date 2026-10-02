@@ -1,0 +1,162 @@
+[
+  {
+    "address": "0x0d98bc5baba59abc896c7015bfff16f476a3e0f3",
+    "chain_id": "eip155:84532",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "DelegationsHoster",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.20+commit.a1b79de6",
+      "deployment_tx": "0xcb0de0dcebbc960eee48fc4c27389c701e6fed61d5c78fd21327ff6cce7510b2",
+      "deployer_address": "0xe90a9789774f128c86bb76ab992a2749bac818ec",
+      "deployment_block": 21715790,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"a14643bc-97ce-4377-8851-a342a5ef3ce7\", \"created_at\": \"2025-02-10 15:04:31.303619\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"5b79411c-6941-4ca1-8cda-9ebd830bfe4c\", \"id\": 1, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0x0ed7fe236dbd7aea5818bd077c43402ce8e42615",
+    "chain_id": "eip155:17000",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "Counter",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.7+commit.e28d00a7",
+      "deployment_tx": "0x208722a6dd0771aad5e33ef7bfca4aedbe212aea871f29cb6771883323f27bbb",
+      "deployer_address": "0xec5562a340bef32d14d7b3794b4ba06e3ec686f8",
+      "deployment_block": 3324908,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"58385581-9011-4d15-a005-f5f20b5c9a81\", \"created_at\": \"2025-02-10 15:04:42.950417\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"7066a7c0-b6c6-4e5b-bb4c-56101a31ea01\", \"id\": 2, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xc6e513a492f2ce35571db70c2883d5ebbb7730ee",
+    "chain_id": "eip155:17000",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "Counter",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.7+commit.e28d00a7",
+      "deployment_tx": "0xf28e9d5470278cd31a17b198ca6c7ff18ba6fcfb8cf89b4d551d491b14942a45",
+      "deployer_address": "0x513fce90655796fe63bda4e9e4524536301be529",
+      "deployment_block": 3324908,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"58385581-9011-4d15-a005-f5f20b5c9a81\", \"created_at\": \"2025-02-10 15:04:43.471239\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"ab6f161e-a99c-4de6-9335-5f55bd6f514f\", \"id\": 3, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xd4ad23b3aa5b039b110e63f8e641051779ac38b0",
+    "chain_id": "eip155:17000",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "Counter",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.7+commit.e28d00a7",
+      "deployment_tx": "0xed80b6e1efd3ea43625b8baa041fd1c365711b2655197e469a4a167269d458d5",
+      "deployer_address": "0x48705df010259194ad478b3bfe50dbb59b626ce2",
+      "deployment_block": 3324910,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"58385581-9011-4d15-a005-f5f20b5c9a81\", \"created_at\": \"2025-02-10 15:05:07.386693\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"522fe331-584d-4e31-a5bc-b68180851165\", \"id\": 4, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xbe402364e3cc3d5ca73dbda2cdf9681352867712",
+    "chain_id": "eip155:97",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "MultiSigIssuance",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.28+commit.7893614a",
+      "deployment_tx": "0xee1f9cb2b39b741db53a1f3bded094001427d64460cf59eca23ebd5ab52da4cc",
+      "deployer_address": "0x7dcaa552e67ae8c5b7430535807ba9eb8b8253bf",
+      "deployment_block": 48159424,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"a1ecc28f-ad95-4355-8f4a-5247362fc0ac\", \"created_at\": \"2025-02-10 15:05:14.355673\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"b046cc97-cd4c-459a-afbb-5b0f076bb868\", \"id\": 5, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xdd738a58551f2241513cb4b29e807d0c746c8dbe",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "Storage",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.26+commit.8a97fa7a",
+      "deployment_tx": "0x48e4ba9d4be55daed82586d1f924c8c0246d88c8380bf838f1adeff98dc40713",
+      "deployer_address": "0x3d042325ffbcc26df1b98fcadb2583484fa829c1",
+      "deployment_block": 26205291,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"a1b4dd39-09ce-4d6b-86c6-cb6b12111f10\", \"created_at\": \"2025-02-10 15:05:31.688055\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"df824b1e-4b9a-4c18-be52-79d49bc72d55\", \"id\": 6, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0x720ddd4d206817ccf287213a583060f368568ccb",
+    "chain_id": "eip155:137",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "MintBurnTeamToken",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.6.12+commit.27d51765",
+      "deployment_tx": "0x9bbaf3fc96cf952b269d94055ce9696fbfe6f5d9d6015cffbd0095f23fe905fb",
+      "deployer_address": "0x91dda567f1cb97168f797b6a32c4950304be19d4",
+      "deployment_block": 67763402,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"5a264c86-f754-4d09-9099-5003a4246daa\", \"created_at\": \"2025-02-10 15:05:56.383584\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"debbe819-bb4b-4137-8eba-71670b2b60da\", \"id\": 7, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xb365037fcb11da32ffa28dfb99b0ce5852a07777",
+    "chain_id": "eip155:80002",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "BurnMintERC677",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.24+commit.e11b9ed9",
+      "deployment_tx": "0xc0ec37436944dbfecc8a3913a0921159a8a6bea6e4ef371b3a423adbe1e3f967",
+      "deployer_address": "0xc73c5fd28d6b9a47790a0d2ca4fd3e8190a65d7f",
+      "deployment_block": 17911467,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"60f58405-e87b-415f-b3f1-a56db8242da7\", \"created_at\": \"2025-02-10 15:06:08.062508\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"c2806a4e-e749-4135-9096-7dc799333d48\", \"id\": 8, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0x9507f6e9f27036faf4aef5409372f0b0ece211fc",
+    "chain_id": "eip155:17000",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "Counter",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.7+commit.e28d00a7",
+      "deployment_tx": "0xb7d834747c8444f4463b8d0bcd49aee4e257b67b1aac2126a85ab30030cdc634",
+      "deployer_address": "0x38eaeb8de56479ff5e650a0cb6ea5f87218f646b",
+      "deployment_block": 3324915,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"58385581-9011-4d15-a005-f5f20b5c9a81\", \"created_at\": \"2025-02-10 15:06:08.368770\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"c97d39bd-7065-4684-9f29-2f8a365cde60\", \"id\": 9, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  },
+  {
+    "address": "0xfed026fc243d5de9cc11e9822de25d2e60e0c2db",
+    "chain_id": "eip155:1",
+    "tags": {
+      "is_contract": true,
+      "source_code_verified": "sourcify",
+      "contract_name": "DEXIndex",
+      "code_language": "solidity",
+      "code_compiler": "solc 0.8.28+commit.7893614a",
+      "deployment_tx": "0x00a4e7c6aa4cc6043e20290115fcfb1ecc1b0029c0f8f5d2be8b8586710bbcb9",
+      "deployer_address": "0xbd5018ab9c086eeec7ef1621027fdeba7ba2bae2",
+      "deployment_block": 21816889,
+      "_source": "https://verifieralliance.org/",
+      "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"0fb5f398-9f73-4422-83d8-77b436fe8653\", \"created_at\": \"2025-02-10 15:06:14.807083\", \"created_by\": \"sourcify\", \"creation_match\": true, \"creation_metadata_match\": true, \"deployment_id\": \"95d287e5-181d-4e3c-9688-649d4bc9a02e\", \"id\": 10, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+    }
+  }
+]

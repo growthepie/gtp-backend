@@ -1,0 +1,16 @@
+{
+  "address": "0xc3e276c036794bfcf6a1d6253a95a8e56fe729e3",
+  "chain_id": "eip155:1868",
+  "tags": {
+    "is_contract": true,
+    "source_code_verified": "blockscout",
+    "contract_name": "SolvBTCOracle",
+    "code_language": "solidity",
+    "code_compiler": "solc v0.8.20+commit.a1b79de6",
+    "deployment_tx": "0xfc0e415c750b3e17c35a97f55968c19ba155c646269e6b373559ba898775f5c6",
+    "deployer_address": "0x8ab8aeef444aee718a275a8325795fe90cf162c4",
+    "deployment_block": 3405946,
+    "_source": "https://verifieralliance.org/",
+    "_comment": "{\"verifier_alliance\": {\"compilation_id\": \"422f9f80-0fcb-43ca-a738-e9434a945f40\", \"created_at\": \"2025-02-19 06:31:47.567933\", \"created_by\": \"blockscout\", \"creation_match\": false, \"creation_metadata_match\": false, \"deployment_id\": \"41555f48-6053-4a23-a6fb-dcacc441dd76\", \"id\": 45131, \"runtime_match\": true, \"runtime_metadata_match\": true}}"
+  }
+}
