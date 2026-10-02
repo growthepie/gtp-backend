@@ -239,6 +239,30 @@ def list_files(session, table):
     return sorted(files, key=lambda f: int(f["key"].rsplit("_", 2)[1]))
 
 
+def parquet_row_count(session, file):
+    with RangeReader(session, f"{EXPORT_URL}/{file['key']}", file["size"], file["etag"]) as reader:
+        return pq.ParquetFile(reader).metadata.num_rows
+
+
+def snapshot_progress(state, session, files):
+    total = checkpointed = 0
+    for file in files:
+        cached = state.db.execute("SELECT etag, row_count FROM file_counts WHERE key=?",
+                                  (file["key"],)).fetchone()
+        if cached and cached[0] == file["etag"]:
+            rows = cached[1]
+        else:
+            rows = parquet_row_count(session, file)
+            with state.db:
+                state.db.execute("INSERT OR REPLACE INTO file_counts VALUES (?, ?, ?)",
+                                 (file["key"], file["etag"], rows))
+        total += rows
+        checkpointed += min(state.progress(file)[0], rows)
+    return {"total_rows": total, "overall_scanned": checkpointed,
+            "remaining_rows": total - checkpointed,
+            "progress_pct": round(100 * checkpointed / total, 6) if total else 100.0}
+
+
 def parquet_batches(session, file, table, batch_size=500):
     with RangeReader(session, f"{EXPORT_URL}/{file['key']}", file["size"], file["etag"]) as reader:
         parquet = pq.ParquetFile(reader)
@@ -276,6 +300,7 @@ class State:
                 id INTEGER PRIMARY KEY CHECK(id = 1), payload TEXT NOT NULL, labels TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS file_roles (key TEXT PRIMARY KEY, etag TEXT, roles TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS file_counts (key TEXT PRIMARY KEY, etag TEXT, row_count INTEGER NOT NULL);
         """)
 
     def progress(self, file):
@@ -450,6 +475,9 @@ def sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifier
         status = "Run limit reached; more work remains." if result["bounded"] else "Caught up with the export."
         message = (f"VERA sync complete: {result['submitted']:,} new attestations submitted to OLI; "
                    f"{result['scanned']:,} verification rows checked. {status}")
+        if "total_rows" in result:
+            message += (f" Overall: {result['overall_scanned']:,}/{result['total_rows']:,} rows "
+                        f"({result['progress_pct']}%); {result['remaining_rows']:,} remaining.")
         if result["duplicates"]:
             message += f" {result['duplicates']:,} duplicate submissions excluded from the new count."
         LOG.info(message)
@@ -485,6 +513,9 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
         verified_files = list_files(session, "verified_contracts")
         verifier_map = preflight_verifiers(state, session, verified_files, allowed, aliases,
                                            None if dry_run else notify)
+        LOG.info("Reading export row counts (cached by ETag)")
+        stats.update(snapshot_progress(state, session, verified_files))
+        LOG.info("Verifier Alliance starting progress (committed checkpoints): %s", stats)
         if not dry_run:
             submission = flush_outbox(state, oli)
             stats["submitted"] += submission["submitted"]
@@ -543,6 +574,10 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
                 if not dry_run:
                     with state.db:
                         state.checkpoint(file, count)
+                    stats["overall_scanned"] += count - offset
+                    offset = count
+                    stats["remaining_rows"] = stats["total_rows"] - stats["overall_scanned"]
+                    stats["progress_pct"] = round(100 * stats["overall_scanned"] / stats["total_rows"], 6)
                     stats["receipts_pruned"] = stats.get("receipts_pruned", 0) + reconcile_receipts(state, engine)
                 batches += 1
                 used_bytes = state.db.execute("PRAGMA page_count").fetchone()[0] * state.db.execute("PRAGMA page_size").fetchone()[0]

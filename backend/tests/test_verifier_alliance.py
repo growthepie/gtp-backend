@@ -35,6 +35,10 @@ class VerifierAllianceTests(unittest.TestCase):
         roles = patch.object(va, "verifier_roles", return_value={"sourcify"})
         roles.start()
         self.addCleanup(roles.stop)
+        self.real_row_count = va.parquet_row_count
+        counts = patch.object(va, "parquet_row_count", return_value=1)
+        self.row_count = counts.start()
+        self.addCleanup(counts.stop)
         self.state = va.State(":memory:")
         self.verification, self.deployment, self.compilation = fixtures()
         self.label = va.make_label(self.verification, self.deployment, self.compilation, {"sourcify": "sourcify"})
@@ -157,6 +161,26 @@ class VerifierAllianceTests(unittest.TestCase):
         session.get.side_effect = get
         rows = list(va.parquet_batches(session, dict(key="test", size=len(content), etag='"etag"'), "compiled_contracts"))
         self.assertEqual(rows, [[self.compilation]])
+        self.assertEqual(self.real_row_count(session, dict(key="test", size=len(content), etag='"etag"')), 1)
+
+    def test_snapshot_counts_cache_and_rewritten_tail(self):
+        files = [dict(key="full", etag="v1"), dict(key="tail", etag="v1")]
+        self.row_count.side_effect = [1000, 73, 91]
+        with self.state.db:
+            self.state.checkpoint(files[0], 1000, True)
+            self.state.checkpoint(files[1], 23)
+        progress = va.snapshot_progress(self.state, Mock(), files)
+        self.assertEqual(progress["total_rows"], 1073)
+        self.assertEqual(progress["overall_scanned"], 1023)
+        self.assertEqual(progress["remaining_rows"], 50)
+        self.assertEqual(va.snapshot_progress(self.state, Mock(), files), progress)
+        self.assertEqual(self.row_count.call_count, 2)
+        files[1]["etag"] = "v2"
+        progress = va.snapshot_progress(self.state, Mock(), files)
+        self.assertEqual(progress["total_rows"], 1091)
+        self.assertEqual(progress["overall_scanned"], 1000)
+        self.assertEqual(progress["remaining_rows"], 91)
+        self.assertEqual(self.row_count.call_count, 3)
 
     def test_dry_run_then_live_then_incremental_skip(self):
         data = {"verified_contracts": self.verification, "contract_deployments": self.deployment,
@@ -175,6 +199,8 @@ class VerifierAllianceTests(unittest.TestCase):
             result = va.sync(directory, Mock(), dry_run=True, notify=notify)
             self.assertEqual(result["attestations"], 1)
             self.assertEqual(result["submitted"], 0)
+            self.assertEqual(result["overall_scanned"], 0)
+            self.assertEqual(result["remaining_rows"], 1)
             notify.assert_not_called()
             sign.assert_not_called()
             with sqlite_connection(directory) as db:
@@ -182,13 +208,38 @@ class VerifierAllianceTests(unittest.TestCase):
             result = va.sync(directory, Mock(), client, dry_run=False, notify=notify)
             self.assertEqual(result["attestations"], 1)
             self.assertEqual(result["submitted"], 1)
+            self.assertEqual(result["overall_scanned"], 1)
+            self.assertEqual(result["progress_pct"], 100.0)
             notify.assert_called_once()
             self.assertIn("1 new attestations", notify.call_args.args[0])
             self.assertIn("Caught up", notify.call_args.args[0])
             result = va.sync(directory, Mock(), client, dry_run=False, notify=notify)
             self.assertEqual(result["scanned"], 0)
+            self.assertEqual(result["overall_scanned"], 1)
+            self.assertEqual(result["remaining_rows"], 0)
             self.assertIn("0 new attestations", notify.call_args.args[0])
             client.api.post_bulk_attestations.assert_called_once()
+
+    def test_overall_progress_resumes_across_bounded_runs(self):
+        self.row_count.return_value = 2
+        data = {"verified_contracts": self.verification, "contract_deployments": self.deployment,
+                "compiled_contracts": self.compilation}
+        def listing(session, table):
+            return [dict(key=table, etag="v1", size=10)]
+        def batches(session, file, table, batch_size=500):
+            yield [data[table]]
+            if table == "verified_contracts":
+                yield [data[table]]
+        existing = {(self.label["chain_id"], self.label["address"], tag, va.json_value(value, tag))
+                    for tag, value in self.label["tags"].items()}
+        with tempfile.TemporaryDirectory() as directory, patch.object(va, "list_files", side_effect=listing), \
+                patch.object(va, "parquet_batches", side_effect=batches), \
+                patch.object(va, "existing_labels", return_value=existing):
+            first = va.sync(directory, Mock(), Mock(), dry_run=False, max_batches=1)
+            self.assertEqual((first["scanned"], first["overall_scanned"], first["progress_pct"]), (1, 1, 50.0))
+            second = va.sync(directory, Mock(), Mock(), dry_run=False)
+            self.assertEqual((second["scanned"], second["overall_scanned"], second["progress_pct"]), (1, 2, 100.0))
+            self.assertEqual(second["remaining_rows"], 0)
 
     def test_missing_join_does_not_advance_verification_checkpoint(self):
         def listing(session, table):
@@ -207,6 +258,7 @@ class VerifierAllianceTests(unittest.TestCase):
 
     def test_changed_tail_includes_late_lower_id_without_duplicate_submissions(self):
         version = ["v1"]
+        self.row_count.side_effect = lambda session, file: 1 if file["etag"] == "v1" else 2
         late = {**self.verification, "id": 0, "deployment_id": "late"}
         def listing(session, table):
             return [dict(key=f"v2/{table}/{table}_0_100.parquet", etag=version[0], size=10)]

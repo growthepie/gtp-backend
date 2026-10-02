@@ -322,6 +322,28 @@ only their verification checkpoint rows while paused (retain all other state):
 DELETE FROM files WHERE key LIKE 'v2/verified_contracts/%';
 ```
 
+## Overall scanning progress
+
+The startup and per-batch progress logs include `overall_scanned`, `total_rows`,
+`remaining_rows`, and `progress_pct`. `scanned` still counts only rows checked in
+the current invocation; `overall_scanned` includes committed verification
+checkpoints from earlier runs using the same state directory. For example,
+`overall_scanned: 1000000, total_rows: 40000000, progress_pct: 2.5` means 2.5% of
+the current export snapshot has been checked. These are verification rows, not
+unique addresses or new attestations.
+
+Exact totals come from Parquet footer metadata, including the partially filled
+last file. Counts are cached by file ETag in a small SQLite table; this does not
+download full export files or add a large storage requirement. A changed file
+must be rescanned, so its previous checkpoint stops contributing to progress.
+The denominator describes the snapshot listed at startup, not exports added
+while the run is active. Dry runs leave cumulative checkpoint progress unchanged.
+Completion notifications include the same overall totals and percentage.
+
+Deploy the updated adapter and restart the script/task with the existing state
+directory to get these fields. An already running Python process keeps the old
+code. No SQLite reset or manual migration is needed.
+
 ## Deduplication and failure recovery
 
 Each batch queries the OLI labels view for existing `(chain, address, tag, value)`
