@@ -311,6 +311,28 @@ class VerifierAllianceTests(unittest.TestCase):
         with patch.object(va, "existing_labels", return_value=visible):
             self.assertEqual(va.reconcile_receipts(self.state, Mock()), 1)
 
+    def test_compiler_v_prefix_is_equivalent_in_db_and_old_receipts(self):
+        canonical = "solc-0.8.20+commit.a1b79de6"
+        label = {**self.label, "tags": {**self.label["tags"], "code_compiler": canonical}}
+        existing = {(label["chain_id"], label["address"], tag, va.json_value(value, tag))
+                    for tag, value in label["tags"].items() if not tag.startswith("_")}
+        for value in (canonical, "solc-v0.8.20+commit.a1b79de6", "solc v0.8.20+commit.a1b79de6"):
+            with self.subTest(value=value):
+                self.assertEqual(va.json_value(value, "code_compiler"), canonical)
+                candidate = {**label, "tags": {**label["tags"], "code_compiler": value}}
+                self.assertEqual(va.missing_labels([candidate], existing.copy(), self.state), [])
+                without_compiler = {key for key in existing if key[2] != "code_compiler"}
+                with self.state.db:
+                    self.state.db.execute("DELETE FROM sent")
+                    self.state.db.execute("INSERT INTO sent VALUES (?, ?, 'code_compiler', ?)",
+                                          (label["chain_id"], label["address"], value))
+                self.assertEqual(va.missing_labels([label], without_compiler, self.state), [])
+                with patch.object(va, "existing_labels", return_value=existing):
+                    self.assertEqual(va.reconcile_receipts(self.state, Mock()), 1)
+        different = {**label, "tags": {**label["tags"], "code_compiler": "solc-v0.8.20+commit.different"}}
+        self.assertEqual(len(va.missing_labels([different], existing.copy(), self.state)), 1)
+        self.assertEqual(va.json_value("solc-v0.8.20", "contract_name"), "solc-v0.8.20")
+
     def test_existing_labels_binds_text_addresses_for_oli_view(self):
         address = "0x" + "ab" * 20
         engine = MagicMock()

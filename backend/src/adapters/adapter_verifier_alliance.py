@@ -113,7 +113,8 @@ def json_value(value, tag=None):
     if tag == "code_compiler" and isinstance(value, str):
         # Sourcify uses compiler-version; the initial importer used a space.
         # Treat those separators as equivalent, preserving the complete version.
-        return re.sub(r"^([A-Za-z][A-Za-z0-9_]*) (?=v?\d+\.)", r"\1-", value)
+        value = re.sub(r"^([A-Za-z][A-Za-z0-9_]*) (?=v?\d+\.)", r"\1-", value)
+        return re.sub(r"^([A-Za-z][A-Za-z0-9_]*)-v(?=\d+\.)", r"\1-", value)
     if tag in {"deployment_tx", "deployer_address"} and isinstance(value, str):
         return value.lower()
     return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
@@ -344,11 +345,17 @@ def missing_labels(labels, existing, state):
             if tag.startswith("_"):
                 continue
             key = (label["chain_id"], label["address"], tag, json_value(value, tag))
-            legacy_value = (re.sub(r"^([A-Za-z][A-Za-z0-9_]*)-(?=v?\d+\.)", r"\1 ", key[-1])
-                            if tag == "code_compiler" else key[-1])
-            if key in existing or state.db.execute(
-                    "SELECT 1 FROM sent WHERE chain=? AND address=? AND tag=? AND value IN (?, ?)",
-                    (*key, legacy_value)).fetchone():
+            if key in existing:
+                continue
+            if tag == "code_compiler":
+                # Normalize older receipts too, including both separators and
+                # optional version prefixes, without rewriting the state DB.
+                received = any(json_value(row[0], tag) == key[-1] for row in state.db.execute(
+                    "SELECT value FROM sent WHERE chain=? AND address=? AND tag=?", key[:3]))
+            else:
+                received = state.db.execute(
+                    "SELECT 1 FROM sent WHERE chain=? AND address=? AND tag=? AND value=?", key).fetchone()
+            if received:
                 continue
             tags[tag] = value
             existing.add(key)  # Deduplicate repeated verifications within this batch.

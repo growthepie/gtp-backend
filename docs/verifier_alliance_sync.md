@@ -346,6 +346,13 @@ code. No SQLite reset or manual migration is needed.
 
 ## Deduplication and failure recovery
 
+The completion message's new-attestation count is the API's accepted count, not
+the number of new addresses or newly verified contracts. API duplicates are
+reported separately; acceptance alone does not prove informational novelty.
+Compiler comparisons normalize both the historical space separator and optional
+version `v` prefix (`solc-v0.8.20` equals `solc-0.8.20`), including old local
+receipts. Actual version and commit differences are preserved.
+
 Each batch queries the OLI labels view for existing `(chain, address, tag, value)`
 tuples across attesters, including Sourcify. Identical values are skipped; missing
 or different values may receive an importer attestation without overwriting other
