@@ -5,7 +5,8 @@ import tempfile
 import unittest
 import sqlite3
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -195,6 +196,26 @@ class VerifierAllianceTests(unittest.TestCase):
 
     def test_checksum_case_does_not_create_a_new_deployer_label(self):
         self.assertEqual(va.json_value("0xAbCd", "deployer_address"), "0xabcd")
+
+    def test_existing_labels_binds_text_addresses_for_oli_view(self):
+        address = "0x" + "ab" * 20
+        engine = MagicMock()
+        connection = engine.connect.return_value.__enter__.return_value
+        connection.execute.return_value = [SimpleNamespace(
+            address=address, chain_id="eip155:1", tag_id="source_code_verified", tag_value="routescan")]
+        labels = [{"address": address.upper(), "chain_id": "eip155:1"},
+                  {"address": address, "chain_id": "eip155:1"}]
+        existing = va.existing_labels(engine, labels)
+        statement, params = connection.execute.call_args.args
+        self.assertEqual(params["addresses"], [address])
+        self.assertEqual(params["chains"], ["eip155:1"])
+        self.assertIn("address = ANY(CAST(:addresses AS text[]))", str(statement))
+        self.assertEqual(existing, {("eip155:1", address, "source_code_verified", "routescan")})
+
+    def test_empty_existing_labels_does_not_query_database(self):
+        engine = Mock()
+        self.assertEqual(va.existing_labels(engine, []), set())
+        engine.connect.assert_not_called()
 
     def test_unknown_role_alerts_and_blocks_before_cache_or_submission(self):
         file = dict(key="v2/verified_contracts/test.parquet", etag="one")

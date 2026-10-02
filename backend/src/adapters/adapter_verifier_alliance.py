@@ -271,13 +271,17 @@ class State:
 
 def existing_labels(engine, labels):
     """One indexed lookup per batch, across all attesters, including Sourcify."""
-    addresses = list({bytes.fromhex(label["address"][2:]) for label in labels})
+    if not labels:
+        return set()
+    # OLI's labels view exposes lowercase 0x-prefixed TEXT addresses, unlike
+    # the bytea addresses used in several growthepie analytics tables.
+    addresses = list({hex_value(label["address"], 20) for label in labels})
     chains = list({label["chain_id"] for label in labels})
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT address, chain_id, tag_id, tag_value
             FROM public.labels
-            WHERE address = ANY(:addresses) AND chain_id = ANY(:chains)
+            WHERE address = ANY(CAST(:addresses AS text[])) AND chain_id = ANY(:chains)
               AND tag_id NOT IN ('_source', '_comment')
         """), {"addresses": addresses, "chains": chains})
         return {(str(r.chain_id), hex_value(r.address, 20), r.tag_id, json_value(r.tag_value, r.tag_id)) for r in rows}
