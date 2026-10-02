@@ -235,6 +235,7 @@ def etl():
         from eth_utils import to_checksum_address
         from src.db_connector import DbConnector
         from src.misc.helper_functions import send_discord_message
+        from src.oli.api.oli_private_attesters import private_attester_notification_suffix
         import src.misc.airtable_functions as at
         from pyairtable import Api
         import os
@@ -332,7 +333,8 @@ def etl():
                 at.push_to_airtable(table, df_new)
 
                 # send discord message
-                send_discord_message(f"{df_new.shape[0]} new attestations submitted to label pool, please review in airtable.", os.getenv('DISCORD_CONTRACTS'))
+                suffix = private_attester_notification_suffix(df_new['attester'])
+                send_discord_message(f"{df_new.shape[0]} new attestations submitted to label pool, please review in airtable.{suffix}", os.getenv('DISCORD_CONTRACTS'))
             else:
                 print('No new attestations to submit to label pool.')
         else:

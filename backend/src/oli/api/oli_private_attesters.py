@@ -1,7 +1,8 @@
+import json
 import os
 import re
 from functools import lru_cache
-from typing import List
+from typing import Dict, Iterable, List
 
 
 _ENV_VAR = "OLI_PRIVATE_ATTESTERS"
@@ -22,17 +23,36 @@ def normalize_attester_address(address: str) -> str:
 
 
 @lru_cache(maxsize=1)
-def get_private_attester_hexes() -> List[str]:
-    raw = os.getenv(_ENV_VAR, "")
-    values = [part for part in re.split(r"[\s,;]+", raw) if part]
-    seen = set()
-    normalized = []
-    for value in values:
+def get_private_attester_names() -> Dict[str, str]:
+    raw = os.getenv(_ENV_VAR, "").strip()
+    if raw.startswith("{"):
+        # Dictionary keys are addresses; values are human-readable names.
+        values = json.loads(raw)
+    else:
+        values = {
+            part: "0x" + normalize_attester_address(part)
+            for part in re.split(r"[\s,;]+", raw) if part
+        }
+    normalized = {}
+    for value, name in values.items():
         attester = normalize_attester_address(value)
-        if attester not in seen:
-            seen.add(attester)
-            normalized.append(attester)
+        normalized.setdefault(attester, name)
     return normalized
+
+
+@lru_cache(maxsize=1)
+def get_private_attester_hexes() -> List[str]:
+    return list(get_private_attester_names())
+
+
+def private_attester_notification_suffix(attesters: Iterable[str]) -> str:
+    private_names = get_private_attester_names()
+    names = dict.fromkeys(
+        private_names[address]
+        for attester in attesters
+        if (address := normalize_attester_address(attester)) in private_names
+    )
+    return f" INTERNAl by {', '.join(names)}" if names else ""
 
 
 def get_private_attester_bytes() -> List[bytes]:
@@ -49,4 +69,5 @@ def private_attester_exclusion_sql(column_name: str = "attester", prefix: str = 
 
 
 def reset_private_attester_cache() -> None:
+    get_private_attester_names.cache_clear()
     get_private_attester_hexes.cache_clear()
