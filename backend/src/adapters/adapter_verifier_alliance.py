@@ -109,6 +109,10 @@ def preflight_verifiers(state, session, files, allowed, aliases, notify=None):
 
 def json_value(value, tag=None):
     """Match the plain-text representation used by OLI's labels view."""
+    if tag == "code_compiler" and isinstance(value, str):
+        # Sourcify uses compiler-version; the initial importer used a space.
+        # Treat those separators as equivalent, preserving the complete version.
+        return re.sub(r"^([A-Za-z][A-Za-z0-9_]*) (?=v?\d+\.)", r"\1-", value)
     if tag in {"deployment_tx", "deployer_address"} and isinstance(value, str):
         return value.lower()
     return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
@@ -139,7 +143,7 @@ def make_label(verification, deployment, compilation, verifier_map):
     if language in {"solidity", "vyper", "yul", "fe", "huff", "stylus"}:
         tags["code_language"] = language
     if compilation.get("compiler") and compilation.get("version"):
-        tags["code_compiler"] = f"{compilation['compiler']} {compilation['version']}"
+        tags["code_compiler"] = f"{compilation['compiler']}-{compilation['version']}"
     for source, target, length in (("transaction_hash", "deployment_tx", 32), ("deployer", "deployer_address", 20)):
         if deployment.get(source) is not None:
             tags[target] = hex_value(deployment[source], length)
@@ -295,7 +299,11 @@ def missing_labels(labels, existing, state):
             if tag.startswith("_"):
                 continue
             key = (label["chain_id"], label["address"], tag, json_value(value, tag))
-            if key in existing or state.db.execute("SELECT 1 FROM sent WHERE chain=? AND address=? AND tag=? AND value=?", key).fetchone():
+            legacy_value = (re.sub(r"^([A-Za-z][A-Za-z0-9_]*)-(?=v?\d+\.)", r"\1 ", key[-1])
+                            if tag == "code_compiler" else key[-1])
+            if key in existing or state.db.execute(
+                    "SELECT 1 FROM sent WHERE chain=? AND address=? AND tag=? AND value IN (?, ?)",
+                    (*key, legacy_value)).fetchone():
                 continue
             tags[tag] = value
             existing.add(key)  # Deduplicate repeated verifications within this batch.
@@ -324,7 +332,8 @@ def reconcile_receipts(state, engine, limit=4000):
         return 0
     labels = [{"chain_id": chain, "address": address} for _, chain, address, _, _ in rows]
     visible = existing_labels(engine, labels)
-    confirmed = [(rowid,) for rowid, chain, address, tag, value in rows if (chain, address, tag, value) in visible]
+    confirmed = [(rowid,) for rowid, chain, address, tag, value in rows
+                 if (chain, address, tag, json_value(value, tag)) in visible]
     with state.db:
         state.db.executemany("DELETE FROM sent WHERE rowid=?", confirmed)
         state.db.execute("INSERT OR REPLACE INTO metadata VALUES ('receipt_cursor', ?)", (str(rows[-1][0]),))

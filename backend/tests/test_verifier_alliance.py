@@ -197,6 +197,26 @@ class VerifierAllianceTests(unittest.TestCase):
     def test_checksum_case_does_not_create_a_new_deployer_label(self):
         self.assertEqual(va.json_value("0xAbCd", "deployer_address"), "0xabcd")
 
+    def test_compiler_separator_does_not_create_new_information(self):
+        self.assertEqual(self.label["tags"]["code_compiler"], "solc-0.8.20")
+        self.assertEqual(va.json_value("solc 0.8.20+commit.123", "code_compiler"),
+                         va.json_value("solc-0.8.20+commit.123", "code_compiler"))
+        self.assertNotEqual(va.json_value("solc 0.8.20+commit.123", "code_compiler"),
+                            va.json_value("solc-0.8.20+commit.456", "code_compiler"))
+        self.assertEqual(va.json_value("solc 0.8.20", "contract_name"), "solc 0.8.20")
+
+    def test_legacy_compiler_receipt_still_prevents_duplicate(self):
+        existing = {(self.label["chain_id"], self.label["address"], tag, va.json_value(value, tag))
+                    for tag, value in self.label["tags"].items()
+                    if not tag.startswith("_") and tag != "code_compiler"}
+        with self.state.db:
+            self.state.db.execute("INSERT INTO sent VALUES (?, ?, 'code_compiler', 'solc 0.8.20')",
+                                  (self.label["chain_id"], self.label["address"]))
+        self.assertEqual(va.missing_labels([self.label], existing, self.state), [])
+        visible = {(self.label["chain_id"], self.label["address"], "code_compiler", "solc-0.8.20")}
+        with patch.object(va, "existing_labels", return_value=visible):
+            self.assertEqual(va.reconcile_receipts(self.state, Mock()), 1)
+
     def test_existing_labels_binds_text_addresses_for_oli_view(self):
         address = "0x" + "ab" * 20
         engine = MagicMock()

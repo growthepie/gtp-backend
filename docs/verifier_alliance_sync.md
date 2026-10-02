@@ -249,7 +249,11 @@ no separate DAG or backfill-to-daily mode switch is needed.
 
 The importer emits `source_code_verified`, `is_contract`, `contract_name`,
 `code_language`, `code_compiler`, `deployment_tx`, `deployer_address`, and
-`deployment_block` where known. Compiler values use `compiler version`.
+`deployment_block` where known. Compiler values use `compiler-version`, matching
+Sourcify's existing labels. The initial importer used `compiler version`; the
+deduplication comparison now treats that separator difference as equivalent,
+including legacy local receipts, without changing the version or commit hash.
+Previously generated JSON samples retain the original formatting.
 Chain IDs come directly from the dataset as `eip155:<chain_id>`; this includes
 chains outside growthepie's tracked set. Verification creation time is **not** a
 deployment date. No ownership, categories, proxy status, or token standards are
