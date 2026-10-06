@@ -29,12 +29,23 @@ def main():
         from src.misc.jinja_helper import execute_jinja_query
         from src.misc.helper_functions import upload_json_to_cf_s3, fix_dict_nan
         from src.oli.api.oli_private_attesters import private_attester_exclusion_sql
+        from src.oli.api.oli_public_cleanup import remove_private_analytics_files
+        import boto3
         import os
         s3_bucket = os.getenv("S3_CF_BUCKET")
         cf_distribution_id = os.getenv("CF_DISTRIBUTION_ID")
-        db_connector_oli = DbConnector(db_name='oli')
         private_attester_filter = private_attester_exclusion_sql("attester")
         private_attester_where_filter = private_attester_exclusion_sql("attester", prefix="WHERE")
+        aws_credentials = {
+            "aws_access_key_id": os.getenv("AWS_ACCESS_KEY_ID"),
+            "aws_secret_access_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
+        }
+        remove_private_analytics_files(
+            boto3.client("s3", **aws_credentials),
+            boto3.client("cloudfront", **aws_credentials),
+            s3_bucket, cf_distribution_id,
+        )
+        db_connector_oli = DbConnector(db_name='oli')
 
 
         ### Attester analytics

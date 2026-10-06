@@ -3305,6 +3305,8 @@ class JSONCreation():
 
     def create_export_oli_parquet(self):
         # Connect to OLI database
+        from src.oli.api.oli_private_attesters import private_attester_exclusion_sql
+        private_filter = private_attester_exclusion_sql(prefix="WHERE")
         exec_string = f"""
             SELECT 
                 concat('0x',encode(uid, 'hex')) as id, 
@@ -3319,7 +3321,7 @@ class JSONCreation():
                 last_updated_time AS "time",
                 "time" AS time_created,
                 revocation_time
-            FROM public.attestations;
+            FROM public.attestations {private_filter};
         """
         with self.db_connector.engine.connect() as connection:
             df = pd.read_sql(exec_string, connection)
@@ -3331,7 +3333,7 @@ class JSONCreation():
 
         exec_string = f"""
             SELECT concat('0x',encode(uid, 'hex')) as id, chain_id, address, tag_id, tag_value, attester, "time" AS time_created, is_offchain 
-            FROM public.labels;
+            FROM public.labels {private_filter};
         """
         with self.db_connector.engine.connect() as connection:
             df = pd.read_sql(exec_string, connection)

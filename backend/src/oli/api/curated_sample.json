@@ -1,0 +1,1203 @@
+[
+  {
+    "address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "USDT",
+      "owner_project": "tetherto",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 52451284
+  },
+  {
+    "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "USD Coin",
+      "owner_project": "circlefin",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 23991811
+  },
+  {
+    "address": "0x278d858f05b94576c1e6f73285886876ff6ef8d2",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 3875546
+  },
+  {
+    "address": "0x00005ea00ac477b1030ce78506496e8c2de24bf5",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "SeaDrop",
+      "owner_project": "opensea",
+      "usage_category": "airdrop",
+      "deployment_tx": "0x87c343071715bc4b285f557b300e762a31729cf202b187adb8a8dcd3f6913d1f",
+      "deployer_address": "0x0000000000FFe8B47B3e2130213B802212439497",
+      "deployment_date": "2022-09-13"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2590519
+  },
+  {
+    "address": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Universal Router v4",
+      "owner_project": "uniswap",
+      "usage_category": "dex",
+      "deployer_address": "0x4e59b44847b379578588920cA78FbF26c0B4956C"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2411474
+  },
+  {
+    "address": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "RelayDepository",
+      "owner_project": "reservoirprotocol",
+      "usage_category": "bridge"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2355717
+  },
+  {
+    "address": "0x0000000071727de22e5e9d8baf0edac6f37da032",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "EntryPoint v0.7",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2251746
+  },
+  {
+    "address": "0x51c72848c68a965f66fa7a88855f9f7784502a7f",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Wintermute_1",
+      "owner_project": "wintermute",
+      "usage_category": "cex",
+      "deployment_tx": "0xea71b7a024ff0b40fcd4dcec4e03259c33819029cbc75857911d77741153fa64",
+      "deployer_address": "0x9F2a049145AF1eE33Ee1de8AdC0e62041761cC5d",
+      "deployment_date": "2023-08-16"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2194919
+  },
+  {
+    "address": "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "V2Router02",
+      "owner_project": "uniswap",
+      "usage_category": "dex",
+      "deployment_tx": "0x4fc1580e7f66c58b7c26881cce0aab9c3509afe6e507527f30566fbf8039bcd0",
+      "deployer_address": "0x9C33eaCc2F50E39940D3AfaF2c7B8246B681A374",
+      "deployment_date": "2020-06-05"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 2161590
+  },
+  {
+    "address": "0x0000000000000068f116a894984e2db1123eb395",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Seaport",
+      "owner_project": "opensea",
+      "usage_category": "developer_tools",
+      "deployment_tx": "0x926e958d5919f0089f47a353b0a8a211bd858abb20348261d41672d77fa7c6a0",
+      "deployer_address": "0x0000000000FFe8B47B3e2130213B802212439497",
+      "deployment_date": "2024-03-15"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1746252
+  },
+  {
+    "address": "0x4313c378cc91ea583c91387b9216e2c03096b27f",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "TradingBot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1638905
+  },
+  {
+    "address": "0x28b1dc1a5e3699a428bc51d234dfab7c9cb2a183",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "DexRouter",
+      "owner_project": "okx",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1493928
+  },
+  {
+    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "SwapRouter02",
+      "owner_project": "uniswap",
+      "usage_category": "dex",
+      "deployment_tx": "0x7299cca7203f60a831756e043f4c2ccb0ee6cb7cf8aed8420f0ae99a16883a2b",
+      "deployer_address": "0x6C9FC64A53c1b71FB3f9Af64d1ae3A4931A5f4E9",
+      "deployment_date": "2021-12-14"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1256507
+  },
+  {
+    "address": "0xbdb3ba9ffe392549e1f8658dd2630c141fdf47b6",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "DEXAggregator",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1197086
+  },
+  {
+    "address": "0x4c82d1fbfe28c977cbb58d8c7ff8fcf9f70a2cca",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "UniversalRouter",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1126646
+  },
+  {
+    "address": "0x0000000000001ff3684f28c67538d4d072c22734",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Allowanceholder",
+      "owner_project": "0xproject",
+      "usage_category": "developer_tools",
+      "deployment_tx": "0x8527df9f875d54bca6b5fd2cb8f7c43cad29c40bab52530435967cd1709236e0",
+      "deployer_address": "0xE83b9E1e78355D67Dbed0384367124A14eB6446c",
+      "deployment_date": "2024-04-04"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1105832
+  },
+  {
+    "address": "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Relay Approval Proxy",
+      "owner_project": "reservoirprotocol",
+      "usage_category": "bridge"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 1073932
+  },
+  {
+    "address": "0x4337084d9e255ff0702461cf8895ce9e3b5ff108",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "EntryPoint",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 983168
+  },
+  {
+    "address": "0xb300000b72deaeb607a12d5f54773d1c19c7028d",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "Diamond",
+      "usage_category": "dex",
+      "deployment_tx": "0x4262d8b1a463ff47cadc9f63c43f42dc188bb0c52c9596fe6c060ea3f66962ef",
+      "deployer_address": "0x13b0D85CcB8bf860b6b79AF3029fCA081AE9beF2",
+      "deployment_date": "2024-05-27"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 919695
+  },
+  {
+    "address": "0x881d40237659c251811cec9c364ef91dc08d300c",
+    "chain_id": "eip155:1",
+    "tags": {
+      "contract_name": "MetaSwap",
+      "owner_project": "metamask",
+      "usage_category": "dex",
+      "deployment_tx": "0xb61e1747cb5b2b9ff4a5dd18e625c1b5547a655d4d5136505e7cabd5e5299e93",
+      "deployer_address": "0x7F18BB4Dd92CF2404C54CBa1A9BE4A1153bdb078",
+      "deployment_date": "2020-10-12"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_ethereum.json",
+    "txcount_180d": 862303
+  },
+  {
+    "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "USDC",
+      "owner_project": "circlefin",
+      "usage_category": "stablecoin",
+      "deployment_tx": "0x8aa214f98bcf2984add809d10232135cccc4d6ab97d8477e66475d8bf68def34",
+      "deployer_address": "0x6aAFF8af0ae8017725312C388bA3745dfE91185B",
+      "deployment_date": "2023-08-18"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 85838066
+  },
+  {
+    "address": "0x681e908b8ab57c49c74d770f369754ccc3e1ae09",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "Ambiguos Contract",
+      "usage_category": "other"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 47091287
+  },
+  {
+    "address": "0x278d858f05b94576c1e6f73285886876ff6ef8d2",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "SearcherStrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 44243341
+  },
+  {
+    "address": "0x402e0d314fd6f55348df7cc478bab811826e3e91",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "Searcher",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 34723008
+  },
+  {
+    "address": "0xf524c1bc1c64a2c99bc7eccf19ede9a1d89d5a7c",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 33884274
+  },
+  {
+    "address": "0x83d55acdc72027ed339d267eebaf9a41e47490d5",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 30198961
+  },
+  {
+    "address": "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "EntryPoint v0.6",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337",
+      "deployment_tx": "0xe7d507ddb3e456811e4714c5c9602f01e9730501a738ff64efa728b3b2e7b89d",
+      "deployer_address": "0x433704c40F80cBff02e86FD36Bc8baC5e31eB0c1",
+      "deployment_date": "2023-07-27"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 28620743
+  },
+  {
+    "address": "0xed57bacdc2a990b631f8817853935791c122c356",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "TesseraPairPool",
+      "owner_project": "kyber-swap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 28543705
+  },
+  {
+    "address": "0xe1191102bdcea1928a93b4d6ea7bf5c4e9207210",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "TesseraPairPool",
+      "owner_project": "kyber-swap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 25830620
+  },
+  {
+    "address": "0x3b84be4d48888a6bc385eea93e522246b214069e",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "SwapSettler",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 25459387
+  },
+  {
+    "address": "0x0000000071727de22e5e9d8baf0edac6f37da032",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "EntryPoint v0.7",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337",
+      "deployment_tx": "0xa9317f175210da3031ac14524f0734319ee991cf2f986fe78dc3aa6cc9315e73",
+      "deployer_address": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+      "deployment_date": "2024-02-22"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 24228306
+  },
+  {
+    "address": "0x61040e143a77f165ba44543af4a079f2c809d14b",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "Slipstream Gauge Interaction",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 18945179
+  },
+  {
+    "address": "0x6ff5693b99212da76ad316178a184ab56d299b43",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "Universal Router v4",
+      "owner_project": "uniswap",
+      "usage_category": "dex",
+      "deployer_address": "0x4e59b44847b379578588920cA78FbF26c0B4956C"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 17400242
+  },
+  {
+    "address": "0xf8aec14c66ad7011305fcd1ef00001c40ed3d407",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 15547789
+  },
+  {
+    "address": "0x780aa57ad37f6e4a92b333b65048fabe24d21c9a",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "PlayerBasePriceScanner",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 15005260
+  },
+  {
+    "address": "0xa57d8e6646e063ffd6eae579d4f327b689da5dc3",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "ArdiEpochDrawContract",
+      "owner_project": "awp",
+      "usage_category": "ai"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 14268032
+  },
+  {
+    "address": "0x7149303eed4a599d2b7ba23e24e027e29d91cc72",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "PriceScanner",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 13704380
+  },
+  {
+    "address": "0x23605743f312de70924f4153560e256736745ed6",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 13523346
+  },
+  {
+    "address": "0x2192bc3b4028acc1113f2cd9ac2cba70c36520db",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "CLPositionManager",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 12443314
+  },
+  {
+    "address": "0xd9c72e940345228b945fabe3b651fa6d39125966",
+    "chain_id": "eip155:8453",
+    "tags": {
+      "contract_name": "RebalancerStrategy",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_base.json",
+    "txcount_180d": 11185001
+  },
+  {
+    "address": "0xcaf681a66d020601342297493863e78c959e5cb2",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "SwapRouter02",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 68167374
+  },
+  {
+    "address": "0x65050a9b7e5075a2ba5ced7b1b64ee66262c40dc",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Swap Router",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 46829233
+  },
+  {
+    "address": "0x8876789976decbfcbbbe364623c63652db8c0904",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "UniversalRouter",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 31194712
+  },
+  {
+    "address": "0x2d0da469115232ad00159757f9d25f81d498206d",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "PitMine",
+      "owner_project": "stonkpit",
+      "usage_category": "gaming"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 19517150
+  },
+  {
+    "address": "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Relay Approval Proxy",
+      "owner_project": "reservoirprotocol",
+      "usage_category": "bridge"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 19233794
+  },
+  {
+    "address": "0x198f7836093961c4e66f0cd9f5af000fb1666a76",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "MEV Bot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 15465800
+  },
+  {
+    "address": "0x00005ea00ac477b1030ce78506496e8c2de24bf5",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "SeaDrop",
+      "owner_project": "opensea",
+      "usage_category": "airdrop"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 14136630
+  },
+  {
+    "address": "0x4337084d9e255ff0702461cf8895ce9e3b5ff108",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "EntryPoint v0.8",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 12471255
+  },
+  {
+    "address": "0x5a4d071208d3118387be208eb013bdfcc2521558",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Trading Bot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 11685319
+  },
+  {
+    "address": "0x8156edd920be55e364b49cb95d2b3327d16bef60",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Monkey",
+      "usage_category": "fungible_tokens"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 10979150
+  },
+  {
+    "address": "0x6fed5ae5d486a59081fdc040179cebda4be80511",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "PitBoysMine",
+      "owner_project": "stonkpit",
+      "usage_category": "gaming"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 9364936
+  },
+  {
+    "address": "0xffa81017a4a2c25ca9a72e199ee65aef45714fcf",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Trading Bot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 8348572
+  },
+  {
+    "address": "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "UniswapV2Router02",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 7715679
+  },
+  {
+    "address": "0x520ed467860d840ec6ca20f1dacb9c0fa5168aa7",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Arbitrage Bot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 7581196
+  },
+  {
+    "address": "0x58daec3116aae6d93017baaea7749052e8a04fa7",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "PositionManager",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 5381741
+  },
+  {
+    "address": "0x4a86009a36fcec5aa341ffceb3205a911fcf6f60",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Swap Router",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 5132707
+  },
+  {
+    "address": "0x000000000022d473030f116ddee9f6b43ac78ba3",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "Permit2",
+      "owner_project": "uniswap",
+      "usage_category": "developer_tools"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 5113931
+  },
+  {
+    "address": "0x0000000071727de22e5e9d8baf0edac6f37da032",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "EntryPoint v0.7",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 4489013
+  },
+  {
+    "address": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "USDG",
+      "owner_project": "paxosglobal",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 4167473
+  },
+  {
+    "address": "0x1521027b665fa38fa4a642991607ad708376dd7b",
+    "chain_id": "eip155:4663",
+    "tags": {
+      "contract_name": "MEV Bot",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_robinhood.json",
+    "txcount_180d": 3999579
+  },
+  {
+    "address": "0xbedaccbd65230ea441e7955c0f5344acfc2a45e5",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Microtransfers",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 66457790
+  },
+  {
+    "address": "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Usdt gate",
+      "owner_project": "tetherto",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 62326103
+  },
+  {
+    "address": "0xcb9cccf0451a284471f5ec835c03bb5d931ecc7e",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Microtransfers",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 15623886
+  },
+  {
+    "address": "0xa5e1a81738259256181f9a0e478188553062d340",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Internal ballance burner",
+      "owner_project": "celo-org",
+      "usage_category": "other"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 7207478
+  },
+  {
+    "address": "0x765de816845861e75a25fca122bb6898b8b1282a",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "USDm",
+      "owner_project": "mento-protocol",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 6122319
+  },
+  {
+    "address": "0x0ad5b1d0c25ecf6266dd951403723b2687d6aff2",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Federatedattestations",
+      "owner_project": "celo-org",
+      "usage_category": "identity"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 6095194
+  },
+  {
+    "address": "0x611beee11e1b21eaa39752607e78c1036435836a",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "MicroTranfers",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 4386694
+  },
+  {
+    "address": "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "EntryPoint v0.6",
+      "owner_project": "eth-infinitism-account-abstraction",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 3335105
+  },
+  {
+    "address": "0x43d72ff17701b2da814620735c39c620ce0ea4a1",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Ubi contract",
+      "owner_project": "gooddollar",
+      "usage_category": "depin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 2327062
+  },
+  {
+    "address": "0xce16f69375520ab01377ce7b88f5ba8c48f8d666",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Squid Router",
+      "owner_project": "0xsquid",
+      "usage_category": "bridge"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 1533846
+  },
+  {
+    "address": "0xb64c8b0a3f8008d5028d8f9323b858f17b18c3c4",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Strategyexecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 1364752
+  },
+  {
+    "address": "0x7f8946b257ad9a8fa55704120957901741a3346c",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 889840
+  },
+  {
+    "address": "0xceba9300f2b948710d2653dd7b07f33a8b32118c",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "USDC",
+      "owner_project": "circlefin",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 808974
+  },
+  {
+    "address": "0x4f93fa058b03953c851efaa2e4fc5c34afdfab84",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Faucetcontract",
+      "owner_project": "gooddollar",
+      "usage_category": "developer_tools"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 618795
+  },
+  {
+    "address": "0x86a75b7a5591a0506785b6f2da35c4e1404f69e5",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "StrategyExecutor",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 534337
+  },
+  {
+    "address": "0xc936fea52d19b5e4c213e0ef08f4ce64e145b07d",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "RewardContract",
+      "usage_category": "airdrop"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 479316
+  },
+  {
+    "address": "0x5615cdab10dc425a742d643d949a7f474c01abc4",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Swaprouter02",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 467295
+  },
+  {
+    "address": "0xe46e6fc70cb514552f561794c9fe91a8b8bfe783",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "CLPool Rebalancer",
+      "usage_category": "trading"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 457180
+  },
+  {
+    "address": "0x39e66ee6b2ddaf4defded3038e0162180dbef340",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "MyriadPTSUnusedComponent",
+      "owner_project": "polkamarkets",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 385913
+  },
+  {
+    "address": "0x89d93356f9b2c5d20b58cc10d4d0031ac69f521e",
+    "chain_id": "eip155:42220",
+    "tags": {
+      "contract_name": "Price Feed Proxy",
+      "usage_category": "oracle"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_celo.json",
+    "txcount_180d": 364624
+  },
+  {
+    "address": "0xe111180000d2663c0091e4f400237545b87b996b",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "CTFExchange (V2)",
+      "owner_project": "polymarket",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 246344378
+  },
+  {
+    "address": "0xe2222d279d744050d28e00520010520000310f59",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Neg Risk CTF Exchange",
+      "owner_project": "polymarket",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 60330137
+  },
+  {
+    "address": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "USDC",
+      "owner_project": "circlefin",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 58050181
+  },
+  {
+    "address": "0x8ca97f41d2c81af050656e8ad0cf543820a24504",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "LonginusRewards",
+      "owner_project": "originworld",
+      "usage_category": "airdrop"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 56462210
+  },
+  {
+    "address": "0x07ff4e06865de4934409aa6ecea503b08cc1c78d",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Origin Silence",
+      "owner_project": "originworld",
+      "usage_category": "staking"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 46657448
+  },
+  {
+    "address": "0xe3f18acc55091e2c48d883fc8c8413319d4ab7b0",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "FeeModule",
+      "owner_project": "polymarket",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 45728442
+  },
+  {
+    "address": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Router v2",
+      "owner_project": "uniswap",
+      "usage_category": "dex"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 35773190
+  },
+  {
+    "address": "0x00000000000fb5c9adea0298d729a0cb3823cc07",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Deposit Wallet Factory",
+      "owner_project": "polymarket",
+      "usage_category": "developer_tools"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 35424590
+  },
+  {
+    "address": "0x1964ca90474b11ffd08af387b110ba6c96251bfc",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Longinus Staking",
+      "owner_project": "originworld",
+      "usage_category": "staking"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 32945016
+  },
+  {
+    "address": "0x78654ed080c1d1c87907646fdb2ae48db3635341",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "StakingHelper",
+      "owner_project": "originworld",
+      "usage_category": "staking"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 26946692
+  },
+  {
+    "address": "0x25a4b842cb200e9148ff5a11babf80488c8d8b07",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Longinus Staking",
+      "owner_project": "originworld",
+      "usage_category": "staking"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 26709306
+  },
+  {
+    "address": "0xd216153c06e857cd7f72665e0af1d7d82172f494",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "RelayHub",
+      "owner_project": "polymarket",
+      "usage_category": "erc4337"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 26060143
+  },
+  {
+    "address": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "USDT0",
+      "owner_project": "tetherto",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 23195882
+  },
+  {
+    "address": "0x6652d0f0d7aec5070804e55b7023d32b9bbc4190",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "OriginLGNS Staking",
+      "owner_project": "originworld",
+      "usage_category": "staking"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 23095090
+  },
+  {
+    "address": "0xeb51d9a39ad5eef215dc0bf39a8821ff804a0f01",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Longinus (LGNS)",
+      "owner_project": "originworld",
+      "usage_category": "fungible_tokens"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 19827128
+  },
+  {
+    "address": "0xca11bde05977b3631167028862be2a173976ca11",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "Multicall3",
+      "owner_project": "multicall-mds1",
+      "usage_category": "developer_tools"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 18823948
+  },
+  {
+    "address": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "ConditionalTokens",
+      "owner_project": "polymarket",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 14269398
+  },
+  {
+    "address": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "USDC.e",
+      "owner_project": "circlefin",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 13155147
+  },
+  {
+    "address": "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "DAI",
+      "owner_project": "makerdao",
+      "usage_category": "stablecoin"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 12268383
+  },
+  {
+    "address": "0xb768891e3130f6df18214ac804d4db76c2c37730",
+    "chain_id": "eip155:137",
+    "tags": {
+      "contract_name": "NegRiskFeeModule",
+      "owner_project": "polymarket",
+      "usage_category": "prediction_markets"
+    },
+    "snapshot_at": "2026-10-06T09:44:00.346762+00:00",
+    "source_url": "https://api.growthepie.com/v1/top_contracts/export_polygon_pos.json",
+    "txcount_180d": 11069493
+  }
+]

@@ -28,6 +28,8 @@ def get_private_attester_names() -> Dict[str, str]:
     if raw.startswith("{"):
         # Dictionary keys are addresses; values are human-readable names.
         values = json.loads(raw)
+        if not isinstance(values, dict):
+            raise ValueError(f"{_ENV_VAR} must be an address-to-name object")
     else:
         values = {
             part: "0x" + normalize_attester_address(part)
@@ -59,10 +61,17 @@ def get_private_attester_bytes() -> List[bytes]:
     return [bytes.fromhex(attester) for attester in get_private_attester_hexes()]
 
 
-def private_attester_exclusion_sql(column_name: str = "attester", prefix: str = "AND") -> str:
-    attesters = get_private_attester_hexes()
+def require_private_attesters() -> List[bytes]:
+    """Public readers/exporters must fail closed when configuration is absent."""
+    attesters = get_private_attester_bytes()
     if not attesters:
-        return ""
+        raise RuntimeError(f"{_ENV_VAR} must contain at least one private attester")
+    return attesters
+
+
+def private_attester_exclusion_sql(column_name: str = "attester", prefix: str = "AND") -> str:
+    require_private_attesters()
+    attesters = get_private_attester_hexes()
 
     values = ", ".join(f"decode('{attester}', 'hex')" for attester in attesters)
     return f"{prefix} {column_name} NOT IN ({values})"

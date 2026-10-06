@@ -2,11 +2,11 @@ import sys, os, json, hashlib, asyncpg, time, asyncio, base64, secrets, logging
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, status, Request, Header
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ValidationError
 from typing import List, Optional, Any, Dict, Tuple, Literal
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from collections import OrderedDict
+from pathlib import Path
 
 from eth_utils import to_normalized_address
 from eth_account import Account
@@ -14,9 +14,11 @@ from eth_account.messages import encode_typed_data
 from eth_abi import decode as abi_decode
 from concurrent.futures import ProcessPoolExecutor
 try:
-    from oli_private_attesters import get_private_attester_bytes
+    from oli_private_attesters import require_private_attesters
+    from oli_access import ReadAccess, ReadLimits
 except ModuleNotFoundError:
-    from src.oli.api.oli_private_attesters import get_private_attester_bytes
+    from src.oli.api.oli_private_attesters import require_private_attesters
+    from src.oli.api.oli_access import ReadAccess, ReadLimits
 
 # from oli import OLI
 # from oli.data.trust import UtilsTrust
@@ -38,6 +40,7 @@ logger = logging.getLogger("uvicorn.error")
 
 import dotenv
 dotenv.load_dotenv()
+READ_LIMITS = ReadLimits.from_env()
     
 # Environment variables
 API_KEY_PEPPER = os.getenv("OLI_KEY_PEPPER")   
@@ -55,7 +58,6 @@ if not ADMIN_BEARER:
     logger.error("Missing required env var: OLI_ADMIN_BEARER")
     raise RuntimeError("OLI_ADMIN_BEARER env var must be set")
 
-logger.info(f"Admin bearer: {ADMIN_BEARER[:4]}...")
 
 #
 #   API KEY Setup
@@ -132,39 +134,37 @@ async def get_api_key(
     request.state.api_key_id = str(row["id"])
     request.state.api_key_prefix = row["prefix"]
     request.state.api_key_owner = row["owner_id"]
+    units = 0
+    if request.url.path == "/labels":
+        units = 1
+    elif request.url.path == "/labels/bulk":
+        try:
+            bulk = BulkLabelsRequest.model_validate(await request.json())
+        except (ValidationError, ValueError):
+            raise HTTPException(422, "Invalid bulk labels request")
+        units = len({normalize_eth_address(a) for a in bulk.addresses})
+    elif request.url.path == "/addresses/search":
+        try:
+            units = int(request.query_params.get("limit", 10))
+        except ValueError:
+            raise HTTPException(422, "Invalid limit")
+        if not 1 <= units <= 50:
+            raise HTTPException(422, "Invalid limit")
+    elif request.url.path == "/curated/sample":
+        units = len(request.app.state.curated_sample)
+    request.state.read_reservation = await request.app.state.read_access.reserve(row["owner_id"], units)
     return ApiKeyMeta(id=str(row["id"]), owner_id=row["owner_id"], prefix=row["prefix"])
 
 
-## Simple in-memory LRU cache with TTL for API key lookups
-class LRUCacheTTL:
-    def __init__(self, maxsize=20000, ttl=120):
-        self.maxsize, self.ttl = maxsize, ttl
-        self.data = OrderedDict()
-    def get(self, k):
-        v = self.data.get(k)
-        if not v: return None
-        exp, val = v
-        if exp < time.time():
-            self.data.pop(k, None); return None
-        self.data.move_to_end(k); return val
-    def set(self, k, val):
-        self.data[k] = (time.time() + self.ttl, val); self.data.move_to_end(k)
-        if len(self.data) > self.maxsize: self.data.popitem(last=False)
-
-_key_cache = LRUCacheTTL()
-_neg_cache = LRUCacheTTL(ttl=5, maxsize=50000)
-
 async def _lookup_key_by_prefix(conn, prefix:str):
-    if _neg_cache.get(prefix) is True: return None
-    cached = _key_cache.get(prefix)
-    if cached is not None: return cached
+    # Recheck revocation on each request; stale caches delay access withdrawal.
     row = await conn.fetchrow("""
         SELECT id, owner_id, prefix, key_hash, revoked_at
           FROM public.api_keys WHERE prefix = $1
     """, prefix)
     if not row:
-        _neg_cache.set(prefix, True); return None
-    rec = dict(row); _key_cache.set(prefix, rec); return rec
+        return None
+    return dict(row)
 
 #
 # DB CONFIG
@@ -197,9 +197,7 @@ def add_private_attester_exclusion(
     idx: int,
     column_name: str = "attester",
 ) -> int:
-    private_attesters = get_private_attester_bytes()
-    if not private_attesters:
-        return idx
+    private_attesters = require_private_attesters()
 
     where_clauses.append(f"{column_name} <> ALL(${idx}::bytea[])")
     params.append(private_attesters)
@@ -305,15 +303,15 @@ class LabelsResponse(BaseModel):
     labels: List[LabelItem]
     
 class BulkLabelsRequest(BaseModel):
-    addresses: List[str] = Field(..., min_items=1, max_items=100)
+    addresses: List[str] = Field(..., min_length=1, max_length=READ_LIMITS.bulk_addresses)
     chain_id: Optional[str] = Field(
         None,
         description="Optional chain_id filter, e.g. 'eip155:8453'"
     )
     limit_per_address: int = Field(
-        50,
+        10,
         ge=1,
-        le=1000,
+        le=50,
         description="Max labels to return per address in the response"
     )
     include_all: bool = False
@@ -385,6 +383,45 @@ class TrustListQueryResponse(BaseModel):
 class TrustListPostResponse(BaseModel):
     uid: str
     status: str = "queued"
+
+
+class CuratedSample(BaseModel):
+    """An explicitly approved, frozen mapping; never fetched from live labels."""
+    address: str
+    chain_id: str
+    tags: Dict[str, str]
+    snapshot_at: datetime
+    source_url: str
+    txcount_180d: int = Field(ge=0)
+
+    @field_validator("address")
+    @classmethod
+    def valid_address(cls, value):
+        return to_normalized_address(value)
+
+
+class CuratedSampleResponse(BaseModel):
+    samples: List[CuratedSample]
+    plans_url: str = "/plans"
+
+
+def load_curated_sample():
+    sample_path = Path(os.getenv("OLI_CURATED_SAMPLE_FILE", str(Path(__file__).with_name("curated_sample.json"))))
+    values = json.loads(sample_path.read_text())
+    if not isinstance(values, list) or len(values) > 100:
+        raise ValueError("Curated sample must be a list of at most 100 approved mappings")
+    samples = [CuratedSample.model_validate(value) for value in values]
+    pairs = set()
+    for sample in samples:
+        pair = (sample.chain_id, sample.address)
+        if pair in pairs:
+            raise ValueError("Curated samples must contain unique chain/address pairs")
+        pairs.add(pair)
+        if not sample.chain_id.startswith("eip155:") or not sample.chain_id[7:].isdigit():
+            raise ValueError("Curated sample chain_id must be eip155:<numeric chain id>")
+        if not sample.tags or set(sample.tags) - {"contract_name", "owner_project", "usage_category", "deployment_tx", "deployer_address", "deployment_date"}:
+            raise ValueError("Curated sample contains unapproved tags")
+    return samples
     
 #
 # CRYPTO / VERIFICATION
@@ -594,6 +631,8 @@ def decode_trust_list_data(msg: AttestationMessage) -> Tuple[Optional[str], Opti
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    require_private_attesters()
+    app.state.curated_sample = load_curated_sample()
     def _redact_env(name: str, value: Optional[str]) -> str:
         if value is None or value == "":
             return "<missing>"
@@ -613,9 +652,14 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info("Initializing DB pool")
-    pool = await asyncpg.create_pool(dsn=DB_DSN, min_size=1, max_size=10)
+    pool = await asyncpg.create_pool(dsn=DB_DSN, min_size=1, max_size=10, command_timeout=30)
     app.state.db = pool
     try:
+        async with pool.acquire() as conn:
+            installed = await conn.fetchval("SELECT to_regclass('public.api_read_buckets') IS NOT NULL AND to_regclass('public.api_read_leases') IS NOT NULL")
+            if not installed:
+                raise RuntimeError("Apply migrations/001_read_limits.sql to the oli database before starting the API")
+        app.state.read_access = ReadAccess(pool, READ_LIMITS)
         yield
     finally:
         logger.info("Shutting down API")
@@ -859,51 +903,66 @@ async def max_body_guard(request: Request, call_next):
 
 @app.middleware("http")
 async def usage_logger(request: Request, call_next):
-    response = await call_next(request)
-
-    key_id = getattr(request.state, "api_key_id", None)
-    # Case A: authenticated route (dependency ran) -> we already know the key_id
-    if key_id:
-        async with app.state.db.acquire() as conn:
-            await conn.execute("""
-                UPDATE public.api_keys
-                   SET usage_count = usage_count + 1, last_used_at = now()
-                 WHERE id = $1
-            """, key_id)
-            await conn.execute("""
-                INSERT INTO public.api_key_usage(key_id, endpoint, status_code, ip)
-                VALUES ($1, $2, $3, $4::inet)
-            """, key_id, request.url.path, response.status_code,
-               (request.client.host if request.client else None))
+    response = None
+    try:
+        response = await call_next(request)
+        reservation = getattr(request.state, "read_reservation", None)
+        if reservation:
+            response.headers["X-Monthly-Address-Limit"] = str(app.state.read_access.limits.addresses_per_month)
+            response.headers["X-Monthly-Address-Remaining"] = str(reservation.remaining)
+            response.headers["X-Monthly-Address-Reset"] = reservation.reset.isoformat()
+            response.headers["Cache-Control"] = "private, no-store"
+        key_id = getattr(request.state, "api_key_id", None)
+        if key_id:
+            try:
+                async with app.state.db.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute("""
+                            UPDATE public.api_keys SET usage_count = usage_count + 1, last_used_at = now()
+                            WHERE id = $1
+                        """, key_id)
+                        await conn.execute("""
+                            INSERT INTO public.api_key_usage(key_id, endpoint, status_code, ip)
+                            VALUES ($1, $2, $3, $4::inet)
+                        """, key_id, request.url.path, response.status_code,
+                           request.client.host if request.client else None)
+            except Exception:
+                logger.exception("Failed to record API request usage")
         return response
-
-    # Case B (optional): public route — best-effort log if a plausible key header is present
-    api_key = request.headers.get(API_KEY_HEADER)
-    if api_key:
-        parsed = hash_presented_key(api_key)
-        if parsed:
-            prefix, _ = parsed
-            # IMPORTANT: we are not authenticating here, just trying to attribute usage.
-            # Use the L1 cache-backed lookup to avoid extra DB reads when warm.
-            async with app.state.db.acquire() as conn:
-                row = await _lookup_key_by_prefix(conn, prefix)  # uses LRU TTL cache internally
-                if row and not row.get("revoked_at"):
-                    await conn.execute("""
-                        UPDATE public.api_keys
-                           SET usage_count = usage_count + 1, last_used_at = now()
-                         WHERE id = $1
-                    """, row["id"])
-                    await conn.execute("""
-                        INSERT INTO public.api_key_usage(key_id, endpoint, status_code, ip)
-                        VALUES ($1, $2, $3, $4::inet)
-                    """, row["id"], request.url.path, response.status_code,
-                       (request.client.host if request.client else None))
-
-    return response
+    finally:
+        reservation = getattr(request.state, "read_reservation", None)
+        if reservation:
+            try:
+                await app.state.read_access.release(reservation, failed=response is None or response.status_code >= 400)
+            except Exception:
+                logger.exception("Failed to release read reservation; lease will expire")
 
 #
 # ROUTES
 #
+
+@app.get("/plans", tags=["Account"])
+async def get_plans():
+    return {
+        "community": {"access": "Community labels; private growthepie attesters excluded", "limits": READ_LIMITS.__dict__},
+        "curated": {"access": "Contact oli@growthepie.com for growthepie curated labels and bulk licensing", "sample_url": "/curated/sample"},
+        "upgrade_url": os.getenv("OLI_UPGRADE_URL", "https://www.growthepie.com"),
+        "usage_url": "/account/usage",
+    }
+
+
+@app.get("/account/usage", dependencies=[Depends(get_api_key)], tags=["Account"])
+async def get_account_usage(request: Request):
+    return await app.state.read_access.usage(request.state.api_key_owner)
+
+
+@app.get("/curated/sample", response_model=CuratedSampleResponse, dependencies=[Depends(get_api_key)], tags=["Labels"])
+async def get_curated_sample():
+    """Return only a frozen, explicitly approved set of curated mappings.
+
+    This endpoint accepts no address/filter input and does not query live labels.
+    """
+    return {"samples": app.state.curated_sample, "plans_url": "/plans"}
 
 ## Attestation endpoints
 
@@ -1032,7 +1091,7 @@ async def get_attestations(
         description="Order results by attestation time (asc or desc). Default: desc"
     ),
     limit: int = Query(
-        30, ge=1, le=1000, description="Max number of attestations to return"
+        30, ge=1, le=100, description="Max number of attestations to return"
     ),
 ):
     """
@@ -1175,7 +1234,7 @@ async def post_trust_list(payload: AttestationPayload):
     return TrustListPostResponse(uid=payload.sig.uid, status="queued")
 
 
-@app.get("/trust-lists", response_model=TrustListQueryResponse, tags=["Attestation: Trust Lists"])
+@app.get("/trust-lists", response_model=TrustListQueryResponse, dependencies=[Depends(get_api_key)], tags=["Attestation: Trust Lists"])
 async def get_trust_lists(
     uid: Optional[str] = Query(None, description="Filter by specific trust list UID (0x...)"),
     attester: Optional[str] = Query(None, description="Filter by attester address (0x...)"),
@@ -1185,16 +1244,18 @@ async def get_trust_lists(
     async with app.state.db.acquire() as conn:
         # Case 1: direct UID lookup
         if uid:
+            where, params = ["uid = $1"], [hex_to_bytes(uid)]
+            add_private_attester_exclusion(where, params, 2)
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT uid, "time", attester, recipient, revoked, is_offchain,
                        tx_hash, ipfs_hash, revocation_time, raw, last_updated_time,
                        schema_info, owner_name, attesters, attestations
                   FROM public.trust_lists
-                 WHERE uid = $1
+                 WHERE {' AND '.join(where)}
                  LIMIT 1;
                 """,
-                hex_to_bytes(uid),
+                *params,
             )
             if not row:
                 return TrustListQueryResponse(count=0, trust_lists=[])
@@ -1208,6 +1269,7 @@ async def get_trust_lists(
             params.append(hex_to_bytes(attester.lower()))
             i += 1
 
+        i = add_private_attester_exclusion(where, params, i)
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = "DESC" if order.lower() == "desc" else "ASC"
 
@@ -1330,7 +1392,7 @@ def _row_to_attestation_record(r) -> AttestationRecord:
 async def get_labels(
     address: str = Query(..., description="Address (0x...)"),
     chain_id: Optional[str] = Query(None, description="Optional chain_id filter"),
-    limit: int = Query(100, le=1000, description="Max number of labels to return"),
+    limit: int = Query(10, ge=1, le=50, description="Max number of labels to return"),
     include_all: bool = Query(False, description="If false (default), return only the latest label per (chain_id, attester, tag_id)"),
 ):
     """Return labels (key/value) for a given address. By default, only the newest per (chain_id, attester, tag_id)."""
@@ -1439,7 +1501,7 @@ async def get_labels_bulk(req: BulkLabelsRequest):
         params.append(req.chain_id)
         next_param += 1
 
-    private_attesters = get_private_attester_bytes()
+    private_attesters = require_private_attesters()
     if private_attesters:
         filter_clauses.append(f"AND l.attester <> ALL(${next_param}::bytea[])")
         params.append(private_attesters)
@@ -1447,37 +1509,22 @@ async def get_labels_bulk(req: BulkLabelsRequest):
 
     filter_sql = "\n            ".join(filter_clauses)
 
-    if req.include_all:
-        # No collapse: return all labels then enforce per-address limit in Python
-        sql = f"""
-            SELECT
-                l.address,
-                l.chain_id,
-                l.tag_id,
-                l.tag_value,
-                l."time",
-                l.attester
+    # Limit each address in PostgreSQL before loading rows into memory.
+    distinct_sql = "" if req.include_all else "DISTINCT ON (l.chain_id, l.attester, l.tag_id)"
+    order_sql = 'l."time" DESC' if req.include_all else 'l.chain_id, l.attester, l.tag_id, l."time" DESC'
+    params.append(req.limit_per_address)
+    sql = f"""
+        SELECT selected.*
+        FROM unnest($1::text[]) AS requested(address)
+        CROSS JOIN LATERAL (
+            SELECT {distinct_sql} l.address, l.chain_id, l.tag_id, l.tag_value, l."time", l.attester
             FROM public.labels AS l
-            WHERE l.address = ANY($1)
+            WHERE l.address = requested.address
             {filter_sql}
-            ORDER BY l."time" DESC;
-        """
-    else:
-        # Collapse to latest per (address, chain_id, attester, tag_id)
-        # DISTINCT ON: order by those keys first, then time desc
-        sql = f"""
-            SELECT DISTINCT ON (l.address, l.chain_id, l.attester, l.tag_id)
-                l.address,
-                l.chain_id,
-                l.tag_id,
-                l.tag_value,
-                l."time",
-                l.attester
-            FROM public.labels AS l
-            WHERE l.address = ANY($1)
-            {filter_sql}
-            ORDER BY l.address, l.chain_id, l.attester, l.tag_id, l."time" DESC;
-        """
+            ORDER BY {order_sql}
+            LIMIT ${next_param}
+        ) AS selected;
+    """
 
     async with app.state.db.acquire() as conn:
         rows = await conn.fetch(sql, *params)
@@ -1528,7 +1575,7 @@ async def search_addresses_by_tag(
     tag_id: str = Query(..., description="The tag key, e.g. 'usage_category'"),
     tag_value: Optional[str] = Query(None, description="Optional tag value, e.g. 'dex'"),
     chain_id: Optional[str] = Query(None, description="Optional chain_id filter, e.g. 'eip155:8453'"),
-    limit: int = Query(100, ge=1, le=1000, description="Max number of addresses to return"),
+    limit: int = Query(10, ge=1, le=50, description="Max number of addresses to return"),
 ):
     """
     Return all addresses that have a specific tag_id and optional tag_value.
