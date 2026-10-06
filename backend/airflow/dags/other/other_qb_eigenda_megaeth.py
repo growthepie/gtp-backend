@@ -170,7 +170,7 @@ def run_dag():
             FROM limits l
             LEFT JOIN public.fact_kpis t
                 ON  t."date"      = l.time
-                AND t.origin_key  = 'megaeth'
+                AND t.origin_key  in ('megaeth', 'megaeth_pre_mainnet')
                 AND t.metric_key  = 'txcount'
             WHERE l.time >= '2025-04-01'
             ORDER BY l.time DESC;
