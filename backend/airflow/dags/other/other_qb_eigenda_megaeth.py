@@ -49,7 +49,7 @@ def run_dag():
             FROM data
             LEFT JOIN public.fact_kpis t
                 ON  t."date"      = data.block_date
-                AND t.origin_key  = 'megaeth'
+                AND t.origin_key  in ('megaeth', 'megaeth_pre_mainnet')
                 AND t.metric_key  = 'txcount'
             GROUP BY block_date, t.value
             ORDER BY time DESC;
