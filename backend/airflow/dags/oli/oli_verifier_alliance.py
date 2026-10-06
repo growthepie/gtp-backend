@@ -52,7 +52,7 @@ def main():
                 response = send_discord_message(message, webhook_url=webhook)
                 response.raise_for_status()
 
-            oli = OLI(private_key=os.environ["OLI_gtp_pk"],
+            oli = OLI(private_key=os.environ["OLI_gtp_auto_pk"],
                       api_key=os.environ["OLI_API_KEY"])
         db = DbConnector(db_name="oli")
         try:

@@ -198,7 +198,7 @@ separately in the VM/storage budget.
   Route this DAG to that worker on multi-worker deployments. Do not use ephemeral
   containers or share the SQLite file across network filesystems. Preserve this
   directory across releases and back it up, especially if an outbox is pending.
-- Set `OLI_gtp_pk` to the dedicated importer attester key and
+- Set `OLI_gtp_auto_pk` to the dedicated importer attester key and
   `OLI_API_KEY`. Existing database credentials must allow reading `public.labels`
   in the **oli** database. Add the importer attester to the appropriate trust list
   separately if its labels should feed trusted views.
