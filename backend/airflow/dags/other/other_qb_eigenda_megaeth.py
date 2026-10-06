@@ -99,14 +99,14 @@ def run_dag():
             FROM public.fact_kpis b
             LEFT JOIN public.fact_kpis c
                 ON  c."date"       = b."date"
-                AND c.origin_key   = 'megaeth'
+                AND c.origin_key   in ('megaeth', 'megaeth_pre_mainnet')
                 AND c.metric_key   = 'eigenda_blob_count'
             LEFT JOIN public.fact_kpis t
                 ON  t."date"       = b."date"
-                AND t.origin_key   = 'megaeth'
+                AND t.origin_key   in ('megaeth', 'megaeth_pre_mainnet')
                 AND t.metric_key   = 'txcount'
             WHERE
-                b.origin_key  = 'megaeth'
+                b.origin_key  in ('megaeth', 'megaeth_pre_mainnet')
                 AND b.metric_key  = 'eigenda_blob_size_bytes'
             ORDER BY b."date" DESC;
         """
