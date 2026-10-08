@@ -10,6 +10,7 @@ Detailed reference guides live in `.claude/skills/`. Load them when debugging th
 | `automated-labeler-pipeline.md` | Contracts missing, skipped, not enriched, not attested |
 | `airtable-labeling-patterns.md` | Linked-record resolution, human override coalesce, dedup, sentinel handling |
 | `oli-attestation-flow.md` | OLI submission rules, owner_project handling, reattest loop |
+| `rpc-discovery.md` | Finding new public RPCs (chainlist + chain docs), auditing `sys_rpc_config`, raw DAGs failing for lack of RPCs |
 
 ---
 
