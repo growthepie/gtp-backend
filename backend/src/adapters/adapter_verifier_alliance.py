@@ -20,7 +20,9 @@ import pyarrow.compute as pc
 import requests
 import yaml
 from jsonschema import Draft202012Validator
+from requests.adapters import HTTPAdapter
 from sqlalchemy import text
+from urllib3.util.retry import Retry
 
 LOG = logging.getLogger(__name__)
 EXPORT_URL = "https://storage.googleapis.com/verifier-alliance-parquet-export"
@@ -215,6 +217,15 @@ class RangeReader(io.RawIOBase):
             data = response.content
         self.position += len(data)
         return data
+
+
+def retrying_session():
+    """Session that retries dropped connections and transient errors; all export calls are idempotent GETs."""
+    session = requests.Session()
+    retry = Retry(total=5, connect=5, read=5, backoff_factor=1,
+                  status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
 
 
 def list_files(session, table):
@@ -514,7 +525,7 @@ def _sync(directory, engine, oli=None, *, dry_run=True, max_batches=100, verifie
         raise ValueError("Live sync requires an OLI client")
     stats = {"scanned": 0, "attestations": 0, "tags": 0, "unknown_verifiers": {},
              "submitted": 0, "duplicates": 0}
-    with locked_state(directory) as state, requests.Session() as session:
+    with locked_state(directory) as state, retrying_session() as session:
         allowed = allowed_verifiers(session, oli)
         # List and check verifier roles first, before any costly cache construction.
         verified_files = list_files(session, "verified_contracts")
