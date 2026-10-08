@@ -5,6 +5,7 @@ from src.misc.airflow_utils import alert_via_webhook
 
 
 LABEL_POOL_REATTEST_TABLE_ID = "tblU8WV0sxYUz6Kcp"
+OSS_PR_EXCLUDED_AUTHORS = {"gitwave22"}
 OSS_DIRECTORY_REPOS = [
     {
         "full_name": "growthepAI/oss-directory",
@@ -201,9 +202,11 @@ def etl():
 
         for repo_config in OSS_DIRECTORY_REPOS:
             repo = github_client.get_repo(repo_config["full_name"])
-            open_prs = list(
-                repo.get_pulls(state="open", sort="created", direction="asc")
-            )
+            open_prs = [
+                pr
+                for pr in repo.get_pulls(state="open", sort="created", direction="asc")
+                if not pr.user or pr.user.login.lower() not in OSS_PR_EXCLUDED_AUTHORS
+            ]
 
             if repo_config.get("metadata_path"):
                 relevant_lines = []
