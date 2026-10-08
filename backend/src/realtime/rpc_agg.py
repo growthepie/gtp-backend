@@ -32,6 +32,7 @@ GAS_ERC20_TRANSFER = 65000  # Standard gas for an ERC20 transfer
 GAS_SWAP = 350000  # Gas for a swap operation (e.g., Uniswap)
 
 PRICE_UPDATE_INTERVAL = 1800  # 30 minutes in seconds
+RPC_REFRESH_INTERVAL_SECONDS = 1800  # re-read sys_rpc_config every 30 minutes
 COINGECKO_SIMPLE_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 COINGECKO_PRO_SIMPLE_PRICE_URL = "https://pro-api.coingecko.com/api/v3/simple/price"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API")
@@ -588,6 +589,8 @@ class RtBackend:
 
         # Initialize clients for each endpoint (will be populated in initialize_async)
         self.blockchain_clients: Dict[str, Any] = {}
+        # Processing tasks for chains started later by rpc_refresh_loop (kept referenced)
+        self._dynamic_tasks: set = set()
 
         # Initialize chain data storage
         self.chain_data: Dict[str, Dict[str, Any]] = {}
@@ -693,17 +696,7 @@ class RtBackend:
         """
         
         for chain_name, config in rpc_config.items():
-            realtime_rpcs = self.db_connector.get_realtime_rpcs_for_chain(chain_name)
-            rpc_urls = [
-                url
-                for url in dict.fromkeys(realtime_rpcs)
-                if url and str(url).strip() and str(url).strip().lower() != "none"
-            ]
-            emergency_rpc_urls = []
-            if chain_name == "ethereum" and config.get("enable_emergency_rpc", False):
-                emergency_rpc = self.db_connector.get_special_use_rpc(chain_name)
-                if emergency_rpc and emergency_rpc not in rpc_urls:
-                    emergency_rpc_urls.append(emergency_rpc)
+            rpc_urls, emergency_rpc_urls = self._load_rpc_urls(chain_name, config)
 
             if not rpc_urls and not emergency_rpc_urls:
                 logger.error(f"No RPC URL configured for {chain_name}, skipping initialization")
@@ -719,6 +712,73 @@ class RtBackend:
 
         logger.info(f"Initialized a total of {len(rpc_config)} RPC endpoints")
         return rpc_config
+
+    def _load_rpc_urls(self, chain_name: str, config: Dict[str, Any]):
+        """Read the realtime and emergency RPC URLs for a chain from sys_rpc_config."""
+        realtime_rpcs = self.db_connector.get_realtime_rpcs_for_chain(chain_name)
+        rpc_urls = [
+            url
+            for url in dict.fromkeys(realtime_rpcs)
+            if url and str(url).strip() and str(url).strip().lower() != "none"
+        ]
+        emergency_rpc_urls = []
+        if chain_name == "ethereum" and config.get("enable_emergency_rpc", False):
+            emergency_rpc = self.db_connector.get_special_use_rpc(chain_name)
+            if emergency_rpc and emergency_rpc not in rpc_urls:
+                emergency_rpc_urls.append(emergency_rpc)
+        return rpc_urls, emergency_rpc_urls
+
+    async def refresh_rpc_endpoints(self) -> List[str]:
+        """
+        Re-read RPC URLs from sys_rpc_config. Running chains get the new list on their next
+        fetch; chains skipped so far (no RPCs at startup) get a client and are returned so
+        the caller can start processing them.
+        """
+        started = []
+        for chain_name, config in self.RPC_ENDPOINTS.items():
+            try:
+                rpc_urls, emergency_rpc_urls = await asyncio.to_thread(self._load_rpc_urls, chain_name, config)
+            except Exception as e:
+                logger.error(f"RPC refresh failed for {chain_name}: {str(e)}")
+                continue
+            if not rpc_urls and not emergency_rpc_urls:
+                # Keep the current list rather than dropping a running chain on an empty/failed read
+                continue
+
+            if rpc_urls != config.get("rpc_urls") or emergency_rpc_urls != config.get("emergency_rpc_urls"):
+                logger.info(f"RPC refresh: {chain_name} now has {len(rpc_urls)} realtime RPC endpoint(s)")
+            # Assign new lists (not in-place) so a fetch iterating the old list is unaffected
+            config["rpc_urls"] = rpc_urls
+            config["emergency_rpc_urls"] = emergency_rpc_urls
+
+            if chain_name in self.blockchain_clients:
+                continue
+            processor = self.processors.get(config["processors"])
+            if not processor:
+                continue
+            url = (rpc_urls or emergency_rpc_urls)[0]
+            try:
+                self.blockchain_clients[chain_name] = await processor.initialize_client(url)
+            except Exception as e:
+                logger.error(f"RPC refresh: failed to initialize client for {chain_name}: {str(e)}")
+                continue
+            config["url"] = url
+            config["active_rpc_index"] = 0
+            logger.info(f"RPC refresh: {chain_name} now has RPCs, starting processing")
+            started.append(chain_name)
+        return started
+
+    async def rpc_refresh_loop(self, interval_seconds: int = RPC_REFRESH_INTERVAL_SECONDS) -> None:
+        """Periodically refresh RPC URLs and start processing chains that became available."""
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                for chain_name in await self.refresh_rpc_endpoints():
+                    task = asyncio.create_task(self.process_chain(chain_name), name=f"process_{chain_name}")
+                    self._dynamic_tasks.add(task)
+                    task.add_done_callback(self._dynamic_tasks.discard)
+            except Exception as e:
+                logger.error(f"RPC refresh loop error: {str(e)}")
 
     async def _activate_rpc_client(self, chain_name: str, rpc_url: str, endpoint_index: int) -> bool:
         """Activate a specific endpoint, rebuilding the client only when needed."""
@@ -1349,6 +1409,9 @@ async def main():
             logger.info(f"  {chain_type}: {len(chains)} chains - {', '.join(chains)}")
         
         # Run all tasks concurrently
+        # Re-read sys_rpc_config periodically; starts chains that had no RPCs at startup
+        tasks.append(asyncio.create_task(backend.rpc_refresh_loop(), name="rpc_refresh"))
+
         await asyncio.gather(*tasks)
         
     except KeyboardInterrupt:

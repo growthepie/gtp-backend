@@ -58,6 +58,9 @@ async def run_backend():
             logger.info(f"  {chain_type}: {len(chains)} chains - {', '.join(chains)}")
         
         # Run all tasks concurrently
+        # Re-read sys_rpc_config periodically; starts chains that had no RPCs at startup
+        tasks.append(asyncio.create_task(backend.rpc_refresh_loop(), name="rpc_refresh"))
+
         await asyncio.gather(*tasks)
         
     except KeyboardInterrupt:
