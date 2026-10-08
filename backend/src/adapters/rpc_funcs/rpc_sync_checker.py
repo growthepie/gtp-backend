@@ -65,7 +65,7 @@ def fetch_rpc_urls(db_connector, chain_name):
         print(e)
         return pd.DataFrame()
     
-def fetch_block(url, results):
+def fetch_block(url, results, full_block_results=None):
     """
     Fetches the latest block number from the specified Ethereum node URL.
     If the connection fails, it returns 0 for that URL.
@@ -73,7 +73,10 @@ def fetch_block(url, results):
     Args:
         url (str): The URL of the Ethereum node.
         results (dict): A dictionary to store the block number for the URL.
+        full_block_results (dict, optional): If given, also checks whether the node can return a
+            block with full transactions (needed by the raw adapters) and stores True/False for the URL.
     """
+    web3_instance = None
     try:
         web3_instance = connect_to_node(url)
         if web3_instance is not None:
@@ -86,13 +89,23 @@ def fetch_block(url, results):
 
     results[url] = block if block is not None else 0
 
+    if full_block_results is not None:
+        full_block_results[url] = False
+        if block:
+            try:
+                web3_instance.eth.get_block(block - 5, full_transactions=True)
+                full_block_results[url] = True
+            except Exception as e:
+                print(f"ERROR: {url} cannot return full blocks: {str(e)[:200]}")
 
-def fetch_all_blocks(rpc_urls):
+
+def fetch_all_blocks(rpc_urls, full_block_results=None):
     """
     Fetches the latest block number from all provided RPC URLs in parallel using threading.
 
     Args:
         rpc_urls (pd.DataFrame): DataFrame containing the RPC URLs.
+        full_block_results (dict, optional): Passed to fetch_block to also check full block support.
 
     Returns:
         dict: A dictionary mapping each RPC URL to its latest block number.
@@ -100,7 +113,7 @@ def fetch_all_blocks(rpc_urls):
     threads = []
     results = {}
     for index, rpc in rpc_urls.iterrows():
-        thread = threading.Thread(target=fetch_block, args=(rpc['url'], results))
+        thread = threading.Thread(target=fetch_block, args=(rpc['url'], results, full_block_results))
         threads.append(thread)
         thread.start()
 
@@ -132,31 +145,36 @@ def check_sync_state(blocks, block_threshold):
             notsynced_nodes.append(url)
     return notsynced_nodes
 
-def deactivate_behind_nodes(db_connector, chain_name, notsynced_nodes):
+def update_sync_state(db_connector, chain_name, synced_nodes, notsynced_nodes):
     """
-    Deactivates nodes in the database that are not synchronized by marking them as 'unsynced'.
+    Writes the sync state of all checked nodes in a single transaction, so readers never see
+    a state where every node is temporarily marked as synced.
 
     Args:
         db_connector: Database connector used to execute the query.
         chain_name (str): The name of the blockchain chain.
-        notsynced_nodes (list): A list of unsynced node URLs.
+        synced_nodes (list): URLs of nodes to mark as synced.
+        notsynced_nodes (list): URLs of nodes to mark as unsynced.
     """
-    if notsynced_nodes:
-        query = """
-        UPDATE sys_rpc_config
-        SET synced = false
-        WHERE origin_key = :origin_key AND url IN :urls;
-        """
-        try:
-            with db_connector.engine.begin() as conn:
-                conn.execute(sa.text(query), {"origin_key": chain_name, "urls": tuple(notsynced_nodes)})
+    query = """
+    UPDATE sys_rpc_config
+    SET synced = :synced
+    WHERE origin_key = :origin_key AND url IN :urls;
+    """
+    try:
+        with db_connector.engine.begin() as conn:
+            if synced_nodes:
+                conn.execute(sa.text(query), {"synced": True, "origin_key": chain_name, "urls": tuple(synced_nodes)})
+            if notsynced_nodes:
+                conn.execute(sa.text(query), {"synced": False, "origin_key": chain_name, "urls": tuple(notsynced_nodes)})
+        print(f"...{len(synced_nodes)} nodes set to synced.")
+        if notsynced_nodes:
             print(f"UNSYNCED Nodes: {tuple(notsynced_nodes)} set to unsynced.")
-        except sa.exc.SQLAlchemyError as e:
-            print("ERROR: updating nodes' synced status.")
-            print(e)
-    else:
-        print("...no nodes to deactivate.")
-          
+    except sa.exc.SQLAlchemyError as e:
+        print("ERROR: updating nodes' synced status.")
+        print(e)
+
+
 def get_chains_available(db_connector):
     """
     Retrieves a list of unique blockchain chain names from the database.
@@ -180,36 +198,11 @@ def get_chains_available(db_connector):
         print(e)
         return []
 
-def activate_nodes(db_connector, chain_name, rpc_urls):
-    """
-    Activates nodes in the database by marking them as 'synced'.
-
-    Args:
-        db_connector: Database connector used to execute the query.
-        chain_name (str): The name of the blockchain chain.
-        rpc_urls (pd.DataFrame): A DataFrame containing the URLs of the nodes to activate.
-    """
-    if not rpc_urls.empty:
-        rpc_urls = tuple(rpc_urls['url'].tolist())
-        query = """
-        UPDATE sys_rpc_config
-        SET synced = true
-        WHERE origin_key = :origin_key AND url IN :urls;
-        """
-        try:
-            with db_connector.engine.begin() as conn:
-                conn.execute(sa.text(query), {"origin_key": chain_name, "urls": rpc_urls})
-            print("...nodes set to synced.")
-        except sa.exc.SQLAlchemyError as e:
-            print("ERROR: updating nodes' synced status.")
-            print(e)
-    else:
-        print("...no nodes to activate.")
-          
 def sync_check():
     """
     Performs a synchronization check for all blockchain chains.
-    Fetches the latest block numbers, checks sync state, activates synchronized nodes, and deactivates unsynced nodes.
+    Fetches the latest block numbers, checks sync state and full block support, then writes the
+    synced flag for all nodes of a chain in one transaction.
 
     The function sets a block threshold of 100 for 'arbitrum' and 30 for other chains.
     """
@@ -228,10 +221,22 @@ def sync_check():
         if rpc_urls.empty:
             print(f"...no RPC urls found for chain: {chain_name} to process.")
         else:
-            activate_nodes(db_connector, chain_name, rpc_urls)
-            blocks = fetch_all_blocks(rpc_urls)
+            full_block_ok = {}
+            blocks = fetch_all_blocks(rpc_urls, full_block_ok)
             notsynced_nodes = check_sync_state(blocks, block_threshold)
-            deactivate_behind_nodes(db_connector, chain_name, notsynced_nodes)
+
+            # Nodes that report a block height but can't serve full blocks (e.g. plan-restricted
+            # endpoints) would fail every raw run. Only enforce this if at least one node passes,
+            # so chains where the check doesn't apply (non-EVM) keep their nodes.
+            no_full_blocks = [url for url in blocks if url not in notsynced_nodes and not full_block_ok.get(url)]
+            if no_full_blocks and len(no_full_blocks) < len(blocks) - len(notsynced_nodes):
+                print(f"UNSYNCED: Nodes {no_full_blocks} cannot return full blocks.")
+                notsynced_nodes += no_full_blocks
+            elif no_full_blocks:
+                print(f"WARNING: no node for {chain_name} passed the full block check, ignoring it for this chain.")
+
+            synced_nodes = [url for url in blocks if url not in notsynced_nodes]
+            update_sync_state(db_connector, chain_name, synced_nodes, notsynced_nodes)
         print(f"DONE: processing chain: {chain_name}")
         
     print("FINISHED: All chains processed.")

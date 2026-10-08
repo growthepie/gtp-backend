@@ -326,7 +326,7 @@ class NodeAdapter(AbstractAdapterRaw):
                 if not active_rpcs:
                     raise Exception("No active RPCs available. Stopping the DAG.")
 
-                # Restart workers only for active RPCs
+                # Restart workers for all active RPCs, so one dead RPC can't block the re-queued ranges
                 for rpc_config in active_rpcs:
                     print(f"Restarting workers for RPC URL: {rpc_config['url']}")
                     new_thread = Thread(target=lambda rpc=rpc_config: self.process_rpc_config(
@@ -335,7 +335,6 @@ class NodeAdapter(AbstractAdapterRaw):
                     threads.append((rpc_config['url'], new_thread))
                     additional_threads.append((rpc_config['url'], new_thread))
                     new_thread.start()
-                    break
 
             # Check for slow RPCs and kick them if necessary
             self.check_and_kick_slow_rpcs(rpc_errors, error_lock, block_range_queue)
@@ -387,7 +386,11 @@ class NodeAdapter(AbstractAdapterRaw):
                 #print(f"Failed to connect to {rpc_config['url']}: {e}")
                 attempt += 1
                 if attempt >= max_retries:
-                    #print(f"Failed to connect to {rpc_config['url']} after {max_retries} attempts. Skipping this RPC.")
+                    # Remove from rotation, otherwise the monitor keeps restarting this RPC forever
+                    print(f"Failed to connect to {rpc_config['url']} after {max_retries} attempts. Removing this RPC from rotation.")
+                    with error_lock:
+                        self.rpc_configs = [rpc for rpc in self.rpc_configs if rpc['url'] != rpc_config['url']]
+                        self.active_rpcs.discard(rpc_config['url'])
                     return
                 #print(f"Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay)

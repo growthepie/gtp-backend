@@ -1,0 +1,12 @@
+# Secrets — pass at runtime via `docker run --env-file env-file.env`
+env-file.env
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build files
+Dockerfile
+.dockerignore
