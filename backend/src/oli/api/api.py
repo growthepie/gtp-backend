@@ -1245,7 +1245,6 @@ async def get_trust_lists(
         # Case 1: direct UID lookup
         if uid:
             where, params = ["uid = $1"], [hex_to_bytes(uid)]
-            add_private_attester_exclusion(where, params, 2)
             row = await conn.fetchrow(
                 f"""
                 SELECT uid, "time", attester, recipient, revoked, is_offchain,
@@ -1269,7 +1268,6 @@ async def get_trust_lists(
             params.append(hex_to_bytes(attester.lower()))
             i += 1
 
-        i = add_private_attester_exclusion(where, params, i)
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = "DESC" if order.lower() == "desc" else "ASC"
 
