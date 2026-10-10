@@ -1234,7 +1234,7 @@ async def post_trust_list(payload: AttestationPayload):
     return TrustListPostResponse(uid=payload.sig.uid, status="queued")
 
 
-@app.get("/trust-lists", response_model=TrustListQueryResponse, dependencies=[Depends(get_api_key)], tags=["Attestation: Trust Lists"])
+@app.get("/trust-lists", response_model=TrustListQueryResponse, tags=["Attestation: Trust Lists"])
 async def get_trust_lists(
     uid: Optional[str] = Query(None, description="Filter by specific trust list UID (0x...)"),
     attester: Optional[str] = Query(None, description="Filter by attester address (0x...)"),
