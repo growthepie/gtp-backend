@@ -33,7 +33,8 @@ def check():
             if chain.api_deployment_flag != 'PROD' or chain.origin_key in ['loopring', 'megaeth', 'polygon_pos', 'ronin', 'robinhood', 'taiko']: ## TODO: remove Taiko once it is back online
                 continue
             
-            test_time = 60
+            ## arbitrum_nova: low activity, blocks can be ~60min apart -> only alert after 5h
+            test_time = 300 if chain.origin_key == 'arbitrum_nova' else 60
             
             print(f"Processing chain: {chain.origin_key}")
             max_val = db_connector.get_max_value(f'{chain.origin_key}_tx', 'block_timestamp')
