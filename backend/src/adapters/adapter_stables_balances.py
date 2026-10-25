@@ -47,7 +47,8 @@ class AdapterStablecoinBalances(AbstractAdapter):
 
     Measurement is a full scan (every mapped token) per address every `full_scan_every_days` days; in between only
     the (address, token) pairs that held a balance since the last full scan are read. Pairs a full scan finds newly
-    funded are backfilled for the days since the previous full scan, so history stays complete.
+    funded are backfilled for the days since the previous full scan, so history stays complete. Historical backfills
+    (dates before measured_from) use the same split in reverse, see measure().
 
     Args:
         adapter_params (dict): Optional keys:
@@ -110,9 +111,16 @@ class AdapterStablecoinBalances(AbstractAdapter):
             - blockscout_min_supply_share (float): 'blockscout': only tokens with at least this share of the chain's stablecoin supply. Default 0.01.
             - blockscout_weekday (int or None): 'blockscout': weekday to rerun on (0 = Monday). Always runs on a chain's first run;
               None = every run. Default 0.
-            - history_years (int): 'dune_history': number of yearly windows back from today. Default 6.
+            - history_years (int): 'dune_history': how many years back from today. Default 6.
+            - history_window_days (int): 'dune_history': length of each window (one Dune query each). Default 365.
+              Shorter windows (e.g. 91 = quarterly) find more holders when the top_n cutoff of a window is still far above
+              history_min_received_usd (logged as "cutoff reached"); high-volume tokens are dominated by routers and bots.
             - history_top_n (int): 'dune_history': top n receivers per token and window. Default 1000.
             - history_min_received_usd (float): 'dune_history': min USD received per (address, token) within a window. Default 100k.
+            - history_token_ids (list): 'dune_history': only these token_ids (e.g. the tokens with the largest coverage gap). Default all mapped tokens.
+              Example seed for a chain where top holders are missing (used for base, arbitrum and polygon_pos in Oct 2026):
+              {'origin_keys': ['arbitrum'], 'days': 21, 'sources': ['dune_history'], 'history_years': 4, 'history_window_days': 91,
+               'history_top_n': 10_000, 'history_token_ids': ['circlefin_usdc', 'tetherto_usdt0']}
             - holders_top_n (int): 'dune_holders': top n holders per token. Default 1000.
             - holders_min_supply_share (float): 'dune_holders': only tokens with at least this share of the chain's stablecoin supply. Default 0.01.
             - holders_min_usd (float): 'dune_holders': min approximate balance in USD. Default 100k.
@@ -165,7 +173,8 @@ class AdapterStablecoinBalances(AbstractAdapter):
         if 'blockscout' in sources and self._blockscout_due(origin_key, params.get('blockscout_weekday', 0)):
             frames.append(self._discover_blockscout(origin_key, params.get('blockscout_top_n', 1000), params.get('blockscout_min_supply_share', 0.01), params.get('blockscout_min_usd', 10_000)))
         if 'dune_history' in sources:
-            frames.append(self._discover_dune_history(origin_key, params.get('history_top_n', 1000), params.get('history_years', 6), params.get('history_min_received_usd', 100_000)))
+            frames.append(self._discover_dune_history(origin_key, params.get('history_top_n', 1000), params.get('history_years', 6), params.get('history_min_received_usd', 100_000),
+                                                      params.get('history_window_days', 365), params.get('history_token_ids')))
         if 'dune_holders' in sources:
             frames.append(self._discover_dune_holders(origin_key, params.get('holders_top_n', 1000), params.get('holders_min_supply_share', 0.01), params.get('holders_min_usd', 100_000), params.get('holders_token_ids')))
         self.merge_candidates(origin_key, frames)
@@ -259,31 +268,42 @@ class AdapterStablecoinBalances(AbstractAdapter):
         print(f"{origin_key}: 'oli' found {len(df)} addresses.")
         return pd.DataFrame({'address': df['address'].apply(self._to_hex), 'source': 'oli'})
 
-    def _discover_dune(self, origin_key: str, top_n: int, days: int, min_received_usd: float, offset_days: int = 0, source: str = 'dune') -> pd.DataFrame:
+    def _discover_dune(self, origin_key: str, top_n: int, days: int, min_received_usd: float, offset_days: int = 0, source: str = 'dune', token_ids: list = None) -> pd.DataFrame:
         """
-        Largest receivers of each mapped stablecoin in a window of `days` days ending `offset_days` days ago
+        Largest receivers of each mapped stablecoin (or only `token_ids`) in a window of `days` days ending `offset_days` days ago
         (Dune erc20_<chain>.evt_Transfer), kept if they received at least min_received_usd of that token.
         """
-        tokens = self._get_tokens(origin_key)
+        tokens = [t for t in self._get_tokens(origin_key) if token_ids is None or t['token_id'] in token_ids]
+        if not tokens:
+            print(f"{origin_key}: skipping '{source}' discovery, none of {token_ids} is mapped on this chain.")
+            return pd.DataFrame(columns=['address', 'source'])
         df = self._run_dune(origin_key, source, DUNE_HOLDER_DISCOVERY_QUERY_ID, tokens, {'days': days, 'offset_days': offset_days, 'top_n': top_n})
         if df.empty:
             return pd.DataFrame(columns=['address', 'source'])
-        df = df[self._raw_to_usd(origin_key, df, 'received_raw', tokens) >= min_received_usd]
+        df['usd'] = self._raw_to_usd(origin_key, df, 'received_raw', tokens)
+        # a token whose top_n-th receiver still got far more than min_received_usd has more large receivers than top_n
+        token_ids_by_address = {t['address'].lower(): t['token_id'] for t in tokens}
+        for token_address, g in df.groupby(df['token_address'].str.lower()):
+            if len(g) >= top_n and g['usd'].min() >= min_received_usd:
+                print(f"{origin_key}: '{source}' {token_ids_by_address.get(token_address)} cutoff reached (top {top_n} all received >= ${g['usd'].min():,.0f}), shorter windows would find more.")
+        df = df[df['usd'] >= min_received_usd]
         print(f"{origin_key}: '{source}' found {df['address'].nunique()} addresses with >= ${min_received_usd:,.0f} received in {days}d ending {offset_days}d ago.")
         return pd.DataFrame({'address': df['address'].str.lower(), 'source': source})
 
-    def _discover_dune_history(self, origin_key: str, top_n: int, years: int, min_received_usd: float) -> pd.DataFrame:
+    def _discover_dune_history(self, origin_key: str, top_n: int, years: int, min_received_usd: float, window_days: int = 365, token_ids: list = None) -> pd.DataFrame:
         """
-        Largest receivers per token in yearly windows back `years` years: a holder must have received its balance at
-        some point, so this finds dormant large holders. One Dune query per year keeps each run far below Dune's
+        Largest receivers per token in windows of `window_days` days back `years` years: a holder must have received its
+        balance at some point, so this finds dormant large holders. One Dune query per window keeps each run far below Dune's
         30 minute limit (a full year on Polygon: ~2 minutes on the medium engine). One-time seed per chain.
         """
-        frames = [self._discover_dune(origin_key, top_n, 365, min_received_usd, offset_days=365 * y, source='dune_history') for y in range(years)]
+        n_windows = -(-years * 365 // window_days)
+        frames = [self._discover_dune(origin_key, top_n, window_days, min_received_usd, offset_days=window_days * w, source='dune_history', token_ids=token_ids)
+                  for w in range(n_windows)]
         frames = [f for f in frames if not f.empty]
         if not frames:
             return pd.DataFrame(columns=['address', 'source'])
         df = pd.concat(frames).drop_duplicates('address')
-        print(f"{origin_key}: 'dune_history' found {len(df)} addresses over {years} yearly windows.")
+        print(f"{origin_key}: 'dune_history' found {len(df)} addresses over {n_windows} windows of {window_days}d.")
         return df
 
     def _blockscout_due(self, origin_key: str, weekday) -> bool:
@@ -428,8 +448,11 @@ class AdapterStablecoinBalances(AbstractAdapter):
         """
         Read balances for every candidate at the last block of each date it has not been measured for yet.
         Dates after measured_to are filled ascending, dates before measured_from descending, so each candidate's
-        measured range stays contiguous. Forward dates use the full/sparse scan split (see class docstring);
-        backward (historical) dates are always full scans.
+        measured range stays contiguous. Both directions use the full/sparse scan split (see class docstring):
+        backward (historical) dates full-scan on a fixed calendar (every full_scan_every_days by date ordinal) and in
+        between read only the pairs with a balance in the following full_scan_every_days measured days; pairs a backward
+        full scan finds that the sparse days missed are backfilled for the later dates since the previous backward full scan.
+        A backfill is a run with a larger `days`, e.g. days=(date.today() - date(2026, 1, 1)).days.
         """
         tokens = self._get_tokens(origin_key)
         token_by_id = {t['token_id']: t for t in tokens}
@@ -450,6 +473,11 @@ class AdapterStablecoinBalances(AbstractAdapter):
         # state as dicts for fast in-memory updates
         ranges = {r.address: [self._as_date(r.measured_from), self._as_date(r.measured_to)] for r in cand.itertuples()}
         last_full = {r.address: self._as_date(r.last_full_scan) for r in cand.itertuples()}
+        # backward state (set on the first backward date, after the forward pass): measured_from per address, last
+        # backward full scan per address, and {date: {address: {token_id}}} with non-zero balances for the following dates
+        start_from = {}
+        prev_full_backward = {}
+        later = None
 
         for direction, dates in (('forward', target_dates), ('backward', list(reversed(target_dates)))):
             for d in dates:
@@ -462,14 +490,22 @@ class AdapterStablecoinBalances(AbstractAdapter):
                 active_tokens = [t for t in tokens if t['max_date'] is None or d <= t['max_date']]
 
                 if direction == 'backward':
-                    full, sparse = todo, []
+                    if later is None:
+                        start_from = {a: f for a, (f, _) in ranges.items() if f is not None}
+                        later = self._get_pairs_by_date(origin_key, min(start_from.values()), max(start_from.values()) + timedelta(days=self.full_scan_every_days - 1))
+                    full = todo if d.toordinal() % self.full_scan_every_days == 0 else []
+                    sparse = [] if full else todo
+                    # pairs with a balance in the following full_scan_every_days days
+                    active = {}
+                    for n in range(1, self.full_scan_every_days + 1):
+                        for a, tids in later.get(d + timedelta(days=n), {}).items():
+                            active.setdefault(a, set()).update(tids)
                 else:
                     full = [a for a in todo if last_full[a] is None or (d - last_full[a]).days >= self.full_scan_every_days]
                     full_set = set(full)
                     sparse = [a for a in todo if a not in full_set]
-
-                # pairs with a balance since each address's last full scan
-                active = self._get_active_pairs(origin_key, [a for a in todo if last_full[a] is not None], d, last_full)
+                    # pairs with a balance since each address's last full scan
+                    active = self._get_active_pairs(origin_key, [a for a in todo if last_full[a] is not None], d, last_full)
 
                 pairs = [(a, t) for t in active_tokens for a in full if a not in t['exclude']]
                 pairs += [(a, token_by_id[tid]) for a in sparse for tid in active.get(a, set()) if tid in token_by_id and a not in token_by_id[tid]['exclude']]
@@ -493,8 +529,37 @@ class AdapterStablecoinBalances(AbstractAdapter):
                         print(f"- {origin_key} {d}: backfilled {sum(len(p) for p in gaps.values())} newly funded pair-days since the last full scan.")
                     for a in full:
                         last_full[a] = d
+                else:
+                    self._add_pairs(later, d, df)
+                    # backfill pairs this full scan found that the sparse days since the previous backward full scan skipped
+                    funded = df.groupby('address')['token_id'].apply(set).to_dict() if not df.empty else {}
+                    gaps = {}
+                    for a in full:
+                        until = prev_full_backward.get(a, start_from.get(a, d))
+                        for tid in funded.get(a, set()) - active.get(a, set()):
+                            for n in range(1, (until - d).days):
+                                gaps.setdefault(d + timedelta(days=n), []).append((a, token_by_id[tid]))
+                    for gap_date, gap_pairs in sorted(gaps.items()):
+                        if gap_date in blocks:
+                            gap_df = self._read_balances(origin_key, gap_pairs, blocks[gap_date])
+                            self._store_balances(origin_key, gap_date, gap_df)
+                            self._add_pairs(later, gap_date, gap_df)
+                    if gaps:
+                        print(f"- {origin_key} {d}: backfilled {sum(len(p) for p in gaps.values())} newly funded pair-days since the previous backward full scan.")
+                    for a in full:
+                        prev_full_backward[a] = d
+                    # keep only the dates later backward dates still look at
+                    for old in [k for k in later if k > d + timedelta(days=self.full_scan_every_days)]:
+                        del later[old]
 
                 # update progress only after balances are stored
+                if direction == 'backward':
+                    # only measured_from, so a concurrent forward run's measured_to/last_full_scan are never overwritten
+                    for a in todo:
+                        ranges[a][0] = d
+                    self._upsert_candidates(pd.DataFrame({'origin_key': origin_key, 'address': todo, 'measured_from': d}))
+                    print(f"{origin_key} {d} (block {blocks[d]}, {direction}): {len(full)} full + {len(sparse)} sparse addresses, {len(pairs)} pairs -> {len(df)} non-zero balances.")
+                    continue
                 for a in todo:
                     f, t = ranges[a]
                     if t is not None and d > t + timedelta(days=1):
@@ -524,6 +589,23 @@ class AdapterStablecoinBalances(AbstractAdapter):
             if r.address in last_full and last_full[r.address] is not None and self._as_date(r.date) >= last_full[r.address]:
                 active.setdefault(r.address, set()).add(r.token_id)
         return active
+
+    def _get_pairs_by_date(self, origin_key: str, since: date, until: date) -> dict:
+        """ {date: {address: {token_id}}} with a non-zero balance between since and until (inclusive) """
+        df = self.db_connector.execute_query(f"""
+            SELECT DISTINCT '0x' || encode(address, 'hex') AS address, token_id, "date"
+            FROM public.fact_stables_balances
+            WHERE origin_key = '{origin_key}' AND "date" BETWEEN '{since}' AND '{until}'
+        """, load_df=True)
+        by_date = {}
+        for r in df.itertuples():
+            by_date.setdefault(self._as_date(r.date), {}).setdefault(r.address, set()).add(r.token_id)
+        return by_date
+
+    @staticmethod
+    def _add_pairs(by_date: dict, d: date, df: pd.DataFrame):
+        for r in df.itertuples():
+            by_date.setdefault(d, {}).setdefault(r.address, set()).add(r.token_id)
 
     def _store_balances(self, origin_key: str, d: date, df: pd.DataFrame):
         if df.empty:
