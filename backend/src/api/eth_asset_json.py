@@ -994,7 +994,8 @@ class EthAssetJSONCreation():
                 AND "date" < current_date
         """, load_df=True)
         df['date'] = pd.to_datetime(df['date'])
-        daily = df.pivot_table(index='date', columns='metric_key', values='value', aggfunc='sum').sort_index()
+        ## drop days where fees_paid_usd isn't there yet (metrics_sql eth_to_usd runs ~03:30, after fees_paid_eth lands)
+        daily = df.pivot_table(index='date', columns='metric_key', values='value', aggfunc='sum').sort_index().dropna()
         ## chains counted = chains with fees in the last 7 days
         active = sorted(df[(df['metric_key'] == 'fees_paid_eth') & (df['date'] >= df['date'].max() - pd.Timedelta(days=6)) & (df['value'] > 0)]['origin_key'].unique())
         unix = (daily.index - pd.Timestamp('1970-01-01')) // pd.Timedelta(milliseconds=1)
