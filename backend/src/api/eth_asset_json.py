@@ -93,8 +93,8 @@ CMC_COMPANIES_CSV_URL = 'https://companiesmarketcap.com/?download=csv'   ## glob
 CMC_ASSETS_URL = 'https://companiesmarketcap.com/assets-by-market-cap/'  ## all assets incl. commodities (gold, silver, platinum)
 CMC_LOGO_URL = 'https://companiesmarketcap.com/img/company-logos/128/{}.png'
 HTTP_HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
-## crypto: CoinGecko id -> key (logo comes from CoinGecko)
-MCAP_CRYPTO = {'ethereum': 'eth', 'bitcoin': 'btc', 'tether': 'usdt', 'usd-coin': 'usdc'}
+## crypto: CoinGecko top N by market cap (incl. ETH), key = lowercased symbol (logo comes from CoinGecko)
+MCAP_CRYPTO_TOP_N = 10
 ## companies: all with a bigger market cap than ETH + the next 10 below ETH (list length moves with the ETH price)
 MCAP_EQUITY_BELOW_ETH = 10
 ## ETH/BTC market cap ratio, daily history (~5.5 years). Our CoinGecko plan only serves 2 years of market_chart history, so:
@@ -1037,13 +1037,13 @@ class EthAssetJSONCreation():
 
     def get_crypto_market_caps(self):
         import os
-        ids = ','.join(MCAP_CRYPTO)
-        response_json = api_get_call(f'https://pro-api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids={ids}', sleeper=10, retries=5,
+        import re
+        response_json = api_get_call(f'https://pro-api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page={MCAP_CRYPTO_TOP_N}', sleeper=10, retries=5,
                                      header={'x-cg-pro-api-key': os.getenv('COINGECKO_API')})
-        if not response_json:
-            raise ValueError("No market data returned from CoinGecko")
+        if not response_json or not {'ethereum', 'bitcoin'} <= {c['id'] for c in response_json}:
+            raise ValueError("ETH/BTC missing in CoinGecko market data")
         return [{
-            'key': MCAP_CRYPTO[c['id']], 'name': c['name'], 'category': 'crypto',
+            'key': re.sub(r'[^a-z0-9]+', '_', c['symbol'].lower()).strip('_'), 'name': c['name'], 'category': 'crypto',
             'market_cap_usd': float(c['market_cap']), 'logo_source_url': c['image'],
             'sources': [SOURCES['coingecko']],
         } for c in response_json]

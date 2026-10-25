@@ -284,7 +284,7 @@ Env vars: `GEMINI_API_KEY`, `GTP_AI_WEBHOOK_URL`.
 
 Current market cap in USD, rebuilt **once a day** (07:00 UTC). Nothing is hardcoded, and nothing needs manual updates.
 
-- **Crypto**: ETH, BTC, USDT, USDC from CoinGecko `/coins/markets`.
+- **Crypto**: CoinGecko's top 10 by market cap (`/coins/markets`, `order=market_cap_desc`), ETH included. The list follows CoinGecko's ranking as-is, so new entrants appear automatically.
 - **Companies**: every company with a bigger market cap than ETH, plus the next 10 below ETH (currently 50 + 10), from the CompaniesMarketCap CSV (`companiesmarketcap.com/?download=csv`, already in USD). New entrants appear automatically.
 - **Commodities**:
   - Gold, silver, platinum: every commodity on the CompaniesMarketCap assets ranking (rows whose logo id ends in `.XM`). Their method is estimated above-ground stock × spot price.
