@@ -95,7 +95,8 @@ CMC_LOGO_URL = 'https://companiesmarketcap.com/img/company-logos/128/{}.png'
 HTTP_HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
 ## crypto: CoinGecko id -> key (logo comes from CoinGecko)
 MCAP_CRYPTO = {'ethereum': 'eth', 'bitcoin': 'btc', 'tether': 'usdt', 'usd-coin': 'usdc'}
-MCAP_EQUITY_TOP_N = 20
+## companies: all with a bigger market cap than ETH + the next 10 below ETH (list length moves with the ETH price)
+MCAP_EQUITY_BELOW_ETH = 10
 ## ETH/BTC market cap ratio, daily history (~5.5 years). Our CoinGecko plan only serves 2 years of market_chart history, so:
 ##   ETH: fact_kpis.market_cap_usd (CoinGecko, collected daily since 2015)
 ##   BTC: Yahoo Finance BTC-USD daily close x circulating supply from blockchain.com (matches CoinGecko within ~0.2% on a typical day)
@@ -1087,14 +1088,15 @@ class EthAssetJSONCreation():
         }
 
     ## top companies worldwide by market cap (USD) from the CompaniesMarketCap csv
-    def get_equity_market_caps(self):
+    def get_equity_market_caps(self, eth_market_cap:float):
         import io, re, requests
         r = requests.get(CMC_COMPANIES_CSV_URL, headers=HTTP_HEADERS, timeout=60)
         r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
-        df = df.sort_values('Rank').head(MCAP_EQUITY_TOP_N)
-        if len(df) < MCAP_EQUITY_TOP_N:
+        df = pd.read_csv(io.StringIO(r.text)).sort_values('marketcap', ascending=False)
+        n = int((df['marketcap'] > eth_market_cap).sum()) + MCAP_EQUITY_BELOW_ETH
+        if len(df) < n:
             raise ValueError(f"Only {len(df)} companies returned from CompaniesMarketCap")
+        df = df.head(n)
         return [{
             'key': re.sub(r'[^a-z0-9]+', '_', str(row['Symbol']).lower()).strip('_'), 'name': row['Name'], 'category': 'equity', 'ticker': row['Symbol'],
             'country': row['country'], 'market_cap_usd': float(row['marketcap']), 'logo_source_url': CMC_LOGO_URL.format(row['Symbol']),
@@ -1160,7 +1162,8 @@ class EthAssetJSONCreation():
     def create_market_caps_json(self):
         crypto = self.get_crypto_market_caps()
         eth_btc_ratio = self.get_eth_btc_ratio(crypto)
-        items = crypto + self.get_equity_market_caps() + self.get_commodity_market_caps()
+        eth_market_cap = next(i['market_cap_usd'] for i in crypto if i['key'] == 'eth')
+        items = crypto + self.get_equity_market_caps(eth_market_cap) + self.get_commodity_market_caps()
         for item in items:
             item['logo'] = self.ensure_logo(item['key'], item.pop('logo_source_url'))
 

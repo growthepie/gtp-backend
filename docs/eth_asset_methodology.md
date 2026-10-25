@@ -285,14 +285,14 @@ Env vars: `GEMINI_API_KEY`, `GTP_AI_WEBHOOK_URL`.
 Current market cap in USD, rebuilt **once a day** (07:00 UTC). Nothing is hardcoded, and nothing needs manual updates.
 
 - **Crypto**: ETH, BTC, USDT, USDC from CoinGecko `/coins/markets`.
-- **Companies**: the global top 20 by market cap from the CompaniesMarketCap CSV (`companiesmarketcap.com/?download=csv`, already in USD). New entrants appear automatically.
+- **Companies**: every company with a bigger market cap than ETH, plus the next 10 below ETH (currently 50 + 10), from the CompaniesMarketCap CSV (`companiesmarketcap.com/?download=csv`, already in USD). New entrants appear automatically.
 - **Commodities**:
   - Gold, silver, platinum: every commodity on the CompaniesMarketCap assets ranking (rows whose logo id ends in `.XM`). Their method is estimated above-ground stock × spot price.
   - Oil, which CompaniesMarketCap doesn't list: world proved reserves (EIA via Our World in Data, latest year read at runtime, currently 2021: ~1,659B barrels) × Brent price (Yahoo Finance `BZ=F`). Most of this oil is still underground, which is why it dwarfs everything else (~$170T).
 - **ETH/BTC market cap ratio** (`eth_btc_ratio`): daily timeseries for the last 2,000 complete days (~5.5 years), values as of 00:00 UTC. `current` is the live ratio from CoinGecko. Our CoinGecko plan only serves 2 years of history, so the series is built from:
   - ETH: `fact_kpis.market_cap_usd` (origin_key `ethereum`, collected daily from CoinGecko since 2015).
   - BTC: Yahoo Finance `BTC-USD` daily close of the previous day × circulating supply from blockchain.com (`total-bitcoins` chart, interpolated to daily). Checked against CoinGecko over 2 years: identical on average, 0.16% standard deviation per day.
-- **Logos**: downloaded the first time an item appears and served from `api.growthepie.com/v1/eth_asset/logos/<key>.png`. Sources: CoinGecko for coins, CompaniesMarketCap (128px) for companies and metals, financialmodelingprep.com for oil. `key` is derived from the ticker (e.g. `nvda`, `2222_sr`), so a new company in the top 20 gets its logo on its first run.
+- **Logos**: downloaded the first time an item appears and served from `api.growthepie.com/v1/eth_asset/logos/<key>.png`. Sources: CoinGecko for coins, CompaniesMarketCap (128px) for companies and metals, financialmodelingprep.com for oil. `key` is derived from the ticker (e.g. `nvda`, `2222_sr`), so a company that newly enters the list gets its logo on its first run.
 - If parsing the CompaniesMarketCap assets page breaks (page layout change), the task fails instead of publishing wrong numbers, and the previous JSON stays live.
 
 ---
