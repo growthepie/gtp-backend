@@ -1,16 +1,18 @@
 # Stablecoin balances adapter: status
 
-As of 2026-10-21. Deployed: `metrics_stables_balances` (daily 01:45 UTC) and the Airtable additions in `oli_airtable` are on `main`.
+As of 2026-10-27. On `main`: `metrics_stables_balances` (daily 01:45 UTC), the Airtable additions in `oli_airtable`, and the app metric `stables_balance` in the app JSONs (commit 308d3088, not yet deployed at the time of writing).
 
 **Goal:** daily stablecoin balances, backfilled at least 3 months, for every address with an OLI `owner_project` plus the larger holders found by discovery, on every chain with app metrics, so balances can be attributed to applications and categories.
 
-**Where it stands:** Ethereum, Polygon PoS and Celo are measured daily with history from 2026-09-30 (21 days). All OLI-mapped addresses are included; small unlabeled candidates are pruned. Still missing: the 3-month backfill, the other app-metrics chains, and the aggregated metric for the API/site.
+**Where it stands:** all 11 EVM app-metrics chains are measured daily (`origin_keys: ['*']`), with history from 2025-01-01 (backfilled manually; MegaETH from 2026-02-08, Robinhood from 2026-05-12, Unichain from 2025-01-21). All OLI-mapped addresses are included; small unlabeled candidates are pruned. Per-app stablecoin balances are aggregated daily into `vw_stables_balance_apps_materialized` and exposed in the app overview and app detail JSONs as `stables_balance`. Still open: Starknet, Polygon coverage, the frontend.
 
 Architecture write-up with diagrams and trial results: https://claude.ai/code/artifact/ff7e1053-75ce-422b-bbe4-0682213a8eb6 (Claude Docs; Discovery and Measurement sections predate the cadence, OLI and pruning changes below).
 
 ---
 
-## Coverage on 2026-10-20
+## Coverage on 2026-10-20 (trial chains)
+
+Coverage was last checked for the three trial chains; the other 8 chains have not been checked yet.
 
 | Chain | Active candidates | Stablecoin supply | Held by tracked addresses | Held by OLI-labeled owners |
 | --- | --- | --- | --- | --- |
@@ -19,7 +21,7 @@ Architecture write-up with diagrams and trial results: https://claude.ai/code/ar
 | Celo | 1,359 | $0.15B | 89.8% | 6.7% |
 
 - Polygon's gap is USDT0 (48%) and native USDC (46%). A one-time Dune seed over 6 yearly windows (16,966 addresses) only lifted it from 53% to ~60%. Blockscout's holder API would solve it, but Polygon is a "featured chain" that needs the Builder, Business or Pro plan.
-- Most labeled value is exchanges, issuers' own contracts and bridges (Ethereum: binance $38.4B, makerdao $10.5B, okx $4.1B). **Decided 2026-10-21:** these count as "held by apps"; no separate issuer/CEX line for now.
+- Most labeled value is exchanges, issuers' own contracts and bridges (Ethereum: binance $38.4B, makerdao $10.5B, okx $4.1B). **Decided 2026-10-21:** these count as apps; no separate issuer/CEX line for now.
 - Labeling: the top 20 unlabeled holders per chain go to the Airtable `Unlabelled` table daily (see below). A one-off export of all unlabeled holders is in `backend/output/stables_unlabeled_addresses_2026-10-07.csv` (gitignored, 9,302 addresses).
 
 ---
@@ -31,12 +33,15 @@ Architecture write-up with diagrams and trial results: https://claude.ai/code/ar
 | File | Role |
 | --- | --- |
 | `backend/src/adapters/adapter_stables_balances.py` | `AdapterStablecoinBalances`: discovery, measurement, pruning |
-| `backend/airflow/dags/metrics/metrics_stables_balances.py` | DAG, daily 01:45 UTC, `origin_keys` = ethereum, polygon_pos, celo, `days` = 21 |
+| `backend/airflow/dags/metrics/metrics_stables_balances.py` | DAG, daily 01:45 UTC: `run_stables_balances` (`origin_keys: ['*']`, `days` = 21) >> `refresh_stables_balance_apps` |
 | `backend/src/queries/postgres/stables/create_stables_balances.sql` | DDL: 2 tables + view (applied, incl. `last_full_scan` and `pruned_on`) |
 | `backend/src/queries/postgres/stables/stables_balances_chain_summary.sql.j2` | Daily totals per chain vs supply |
 | `backend/src/queries/postgres/stables/stables_balances_unmapped_top.sql.j2` | Unlabeled holders ranked by balance |
 | `backend/src/queries/dune/stables_balances_holder_discovery.sql` | Saved Dune query 8915328: top receivers per token in a window (`days`, `offset_days`) |
 | `backend/src/queries/dune/stables_balances_top_holders.sql` | Saved Dune query 8915430: all-time net transfers (fallback only) |
+| `backend/src/queries/postgres/stables/create_vw_stables_balance_apps_materialized.sql` | DDL: per-app daily balance view (applied 2026-10-27, owner = Airflow role) |
+| `backend/src/config.py` | App metric `stables_balance` in `gtp_metrics_new['apps']` |
+| `backend/src/api/json_creation.py` | App overview columns, app detail merge, KPI card for `stables_balance` |
 | `backend/src/db_connector.py` | `get_unlabelled_stables_holders`, `get_latest_stables_balances_usd` (Airtable) |
 | `backend/airflow/dags/oli/oli_airtable.py` | `airtable_write_contracts`: adds top 20 stablecoin holders per chain and fills `stablecoin_balance` |
 | `backend/src/currency_config.py` | Added GHS, BOB, PYG, UYU, VES (FX via the GitHub currency API fallback) |
@@ -48,6 +53,7 @@ Architecture write-up with diagrams and trial results: https://claude.ai/code/ar
 | `sys_stables_balances_candidates` | One row per (origin_key, address): `sources`, discovery dates, `measured_from` / `measured_to`, `last_full_scan`, `pruned_on` |
 | `fact_stables_balances` | End-of-day balance per (date, origin_key, token_id, address); non-zero rows only |
 | `vw_fact_stables_balances_v1` | Balances + USD (price from `vw_fact_stables_mcap_v2`) + issuer + OLI owner_project / usage_category / main category |
+| `vw_stables_balance_apps_materialized` | Per (owner_project, origin_key, date): `stables_balance_usd`, `stables_balance_eth`. Full rebuild daily (`REFRESH ... CONCURRENTLY`, ~1.5 min) with current cross-chain OLI labels; zero rows on days an app held nothing |
 
 Our DB user can't `ALTER` these tables (not owner); schema changes must be run by you.
 
@@ -61,16 +67,21 @@ Our DB user can't `ALTER` these tables (not owner); schema changes must be run b
 | `oli` | **All** OLI addresses with an `owner_project` (no cap) | Daily | Postgres |
 | `dune` | Top 1,000 receivers per token over the last 7 days, at least $100k received | Daily | ~1 Dune credit per chain |
 | `blockscout` | Current top 1,000 holders per token with at least 1% of chain supply, at least $10k | First run per chain, then Mondays | Free (PRO key; Polygon gets HTTP 402) |
-| `dune_history` | Same as `dune` over yearly windows back 6 years | Manual one-time seed (ran for Polygon) | ~2–4 min medium engine per window |
+| `dune_history` | Same as `dune` over windows back N years; `history_window_days` (e.g. 91 = quarterly) and `history_token_ids` to target the biggest gaps | Manual one-time seed (ran for Polygon, Base, Arbitrum) | ~2–4 min medium engine per window |
 | `dune_holders` | All-time net transfers per token | Manual fallback only | ~60 credits on Ethereum; times out on Polygon and Celo |
 
-**Measurement:** `balanceOf()` via Multicall3 at the last block of each day (`first_block_of_day(D+1) - 1`). Up to 1,000 balances per call, 6 calls in parallel, halving automatically when RPCs reject a batch (Polygon settles at 500). Each address gets a full scan of all mapped tokens every 7 days and only its held pairs in between; newly funded pairs found by a full scan are backfilled since the previous full scan. Addresses in `exclude_balances` of the stables config are never measured.
+**Measurement:** `balanceOf()` via Multicall3 at the last block of each day (`first_block_of_day(D+1) - 1`). Up to 1,000 balances per call, 6 calls in parallel, halving automatically when RPCs reject a batch (Polygon settles at 500). Each address gets a full scan of all mapped tokens every 7 days and only its held pairs in between; newly funded pairs found by a full scan are backfilled since the previous full scan. Historical backfills (dates before `measured_from`) use the same split in reverse (ad852d76). Addresses in `exclude_balances` of the stables config are never measured.
 
 **Pruning** (after each run): candidates with no OLI `owner_project`, measured at least 14 days, and below $10k total on every day of the last 30 get `pruned_on` set and are no longer measured (history stays). A pruned address found again by a balance-based source (`dune`, `blockscout`, `dune_history`, `dune_holders`) or OLI is unpruned, gets a forced full scan, and the skipped days are backfilled. On 2026-10-21: 2,296 pruned on Ethereum, 17,196 on Polygon, 1,325 on Celo.
 
 **RPCs:** non-special RPCs from `sys_rpc_config` only (active first, then inactive as fallback); paid `special_use` RPCs are never called. Failing RPCs move to the back of the list.
 
-**Chains:** `origin_keys: ['*']` resolves to every chain with `runs_aggregate_apps` in `main_config`, minus non-EVM chains (Starknet). The DAG still lists the three trial chains explicitly.
+**Chains:** `origin_keys: ['*']` resolves to every chain with `runs_aggregate_apps` in `main_config`, minus non-EVM chains (Starknet). The DAG uses `['*']`: Arbitrum, Base, Celo, Ethereum, MegaETH, Mode, Optimism, Polygon PoS, Robinhood, Scroll, Unichain.
+
+**App metric `stables_balance` (API JSONs, built by `api_json_creation` at 05:30 UTC):**
+- `apps/app_overview_{1d,7d,30d,90d,365d,max}.json`: per (app, chain) row, appended columns `stables_balance_usd` (latest measured day), `prev_stables_balance_usd` (one timeframe earlier; 0 for `max`) and `stables_balance_eth`. 0 when an app has no stablecoin data (avoids NaN alerts).
+- `apps/details/{project}.json`: metric `stables_balance` ("Stablecoin Balance") with daily `['unix','usd','eth']` series per chain, `aggregated` = average daily balance per timeframe (`monthly_agg: avg`), and `kpi_cards.stables_balance`. Chains without stablecoin data: empty series, `[null, null]` aggregates.
+- Attribution: same cross-chain OLI labels as the other app metrics; exchanges and issuers' own contracts count as apps.
 
 **Airtable (`oli_airtable` DAG, `airtable_write_contracts`):** the top 20 unlabeled stablecoin holders per chain (latest measured day) join the daily `Unlabelled` refill, with the reason in `_comment` ("Stablecoins held: $X (tokens)"). A `stablecoin_balance` column (USD, created 2026-10-21) is filled for every written row we have balance data for.
 
@@ -88,11 +99,11 @@ A sparse day afterwards takes under a minute per chain. Full scans are CPU-heavy
 
 ## Open issues
 
-1. **Backward backfill reads every token for every address.** Dates before an address's `measured_from` are always full scans: ~3,200 calls per day of history on Ethereum. A 90-day backfill would be ~90k calls. This is why the DAG runs `days: 21` for now.
-2. **Archive depth of free RPCs is unverified beyond 21 days.** On Ethereum, drpc, tenderly, sentio and mevblocker served historical state; pocket, publicnode, blockpi and several others are pruned. Polygon: drpc and Tenderly's gateway work.
-3. **Polygon coverage ~59%** (see above).
-4. **No aggregated metric yet.** Balances per address with app/category attribution exist in the view, but nothing aggregates them into app or chain metrics for the API/site.
-5. **Only 3 of 11 EVM app-metrics chains.** Arbitrum, Base, Optimism, Scroll, Unichain, MegaETH, Mode and Robinhood all have Multicall3, free RPCs and a Dune alias; Blockscout plan coverage is unchecked. Starknet needs its own path.
+1. **Polygon coverage ~59%** on the last check (see above); the quarterly `dune_history` seed may have improved it. Blockscout's Builder plan would close the gap.
+2. **Coverage not yet checked for the 8 newer chains.** Run `stables_balances_chain_summary.sql.j2` for all chains.
+3. **Starknet** is an app-metrics chain but isn't measured (non-EVM, no Multicall3); its app pages show empty `stables_balance` series.
+4. **Frontend:** the JSON fields exist once 308d3088 is deployed; pages and the overview still need to display them.
+5. **Local tunnel:** the VS Code port forward for `localhost:5432` dropped repeatedly (hung logins, `SSL SYSCALL error`). Dead clients leave server sessions `idle in transaction` that block matview `REFRESH` and `DROP` (happened twice). Suggested: `ALTER ROLE orbal_writer SET idle_in_transaction_session_timeout = '30min'` (DBA, check Airflow first), and a plain `ssh -L` tunnel for long runs.
 6. **DB connections:** many `DbConnector` readers use `pd.read_sql(..., self.engine.connect())` without closing. A long-lived process (here: a stopped local run) kept transactions open on `vw_oli_label_pool_gold_v2` and blocked its production `REFRESH` for ~10 minutes on 2026-10-21. Fixed in ff931ba9 ("close connections used by pd.read_sql"); after interrupting local runs, still check `pg_stat_activity`.
 7. **Housekeeping:** rotate the Blockscout key (it appeared in a log once; errors are redacted now); flag paid keyed RPCs in `sys_rpc_config` (Alchemy, Tatum, QuickNode, RPCfast rows) as `special_use`; backfill FX rates for the 5 added currencies so their stablecoins get USD values in past days.
 
@@ -100,13 +111,12 @@ A sparse day afterwards takes under a minute per chain. Full scans are CPU-heavy
 
 ## Next steps toward the goal
 
-1. **Check the first deployed runs** of `metrics_stables_balances` and `oli_airtable` (runtime, errors, Airtable rows with `stablecoin_balance`).
-2. **Make backward backfill sparse.** Reuse the forward logic in the backward pass: full scan on the newest backfill day, then only held pairs, with a full scan every 7 days going back. That brings a 90-day Ethereum backfill to roughly 15k calls.
-3. **Verify 90-day archive access** on each chain's free RPCs.
-4. **Backfill to 90 days**, then raise the DAG's `days` (it only measures missing days per address, so a larger window costs nothing once filled).
-5. **Build the metric:** daily aggregation of `vw_fact_stables_balances_v1` into app and chain metrics (by app, by category, share of chain supply in apps). Issuers' own contracts and exchanges count as apps.
-6. **Roll out to the other app-metrics chains** a few at a time (`origin_keys: ['*']` when all are in), watching first-run cost; then Starknet.
-7. **Polygon:** decide on the Blockscout plan upgrade.
+1. **Deploy 308d3088** and check the first runs: `refresh_stables_balance_apps` in `metrics_stables_balances`, then `api_json_creation` (no NaN alerts, `stables_balance` in overview and details).
+2. **Frontend:** show `stables_balance` on the app overview (column + % change) and app pages (chart, KPI card).
+3. **Check coverage on all 11 chains** and seed the weakest with `dune_history` (quarterly windows, top tokens).
+4. **Polygon:** decide on the Blockscout plan upgrade.
+5. **Starknet:** separate balance path (no Multicall3).
+6. **Chain-level metric (optional):** share of a chain's stablecoin supply held by apps, from the same view.
 
 ---
 
@@ -139,7 +149,8 @@ Coverage check: render `stables_balances_chain_summary.sql.j2` with `origin_keys
 
 - The DB tunnel on `localhost:5432` dropped several times; runs fail with `SSL SYSCALL error: EOF detected`. Progress is saved per day, so rerunning resumes.
 - Stopping a local run does not stop a Dune execution already submitted. Cancel it via `POST https://api.dune.com/api/v1/execution/<id>/cancel`.
-- Stopped local processes can leave `idle in transaction` sessions that block matview refreshes; check `pg_stat_activity` (client_addr `127.0.0.1` = tunnel) after interrupting runs.
+- Stopped local processes can leave `idle in transaction` sessions that block matview refreshes and drops; check `pg_stat_activity` (client_addr `127.0.0.1` = tunnel) after interrupting runs.
+- Local JSON generation (`JSONCreation(None, None, ...)`) still sends Discord NaN alerts from `fix_dict_nan`; patch it to `send_notification=False` for local runs. `run_app_details_jsons_all` ends with a CloudFront invalidation; call `run_app_details_jsons(projects, is_all=True)` locally instead.
 - Dune executions stop at 30 minutes; all-time scans of USDC/USDT on Polygon and Celo hit that limit.
 - Two runs on the same chain at once duplicate RPC work (results stay correct, upserts are idempotent).
 - Public RPCs: Polygon caps eth_call responses at 100 KB (~500 balances); many Ethereum/Polygon public nodes are pruned and fail on historical blocks.

@@ -612,7 +612,7 @@ gtp_metrics_new = {
             }
             ,'stables_balance': {
                 'name': 'Stablecoin Balance',
-                'icon': 'metrics-stablecoin-market-cap',
+                'icon': 'metrics-stablecoinmarketcap',
                 'category': 'value-locked',
                 'fundamental': False,
                 'description': 'Value of stablecoins held by contracts and addresses that are mapped to the application, at the end of each day.',
