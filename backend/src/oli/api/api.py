@@ -835,8 +835,7 @@ def build_trust_list_row_from_eas(att: AttestationPayload) -> dict:
 
     # uid / recipient / tx fields
     uid_bytes       = hex_to_bytes(sig.uid)
-    recipient_bytes = hex_to_bytes(msg.recipient) if msg.recipient else None
-    recipient_str = ("0x" + recipient_bytes.hex()) if recipient_bytes is not None else None
+    recipient_bytes = hex_to_bytes(msg.recipient) if msg.recipient else None  # trust_lists.recipient is bytea
     tx_hash_bytes   = None  # offchain (set if you later include onchain TLs)
 
     # times
@@ -847,7 +846,7 @@ def build_trust_list_row_from_eas(att: AttestationPayload) -> dict:
         "uid": uid_bytes,
         "time": time_dt,
         "attester": attester_bytes,
-        "recipient": recipient_str,
+        "recipient": recipient_bytes,
         "revoked": False,
         "is_offchain": True,                      # TL via EAS offchain
         "tx_hash": tx_hash_bytes,
