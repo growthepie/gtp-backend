@@ -44,6 +44,17 @@ def etl():
             'prune_min_usd': 10_000,          # stop measuring candidates without OLI owner that stay below this
         })
 
-    run_stables_balances()
+    @task()
+    def refresh_stables_balance_apps():
+        from src.db_connector import DbConnector
+        db_connector = DbConnector()
+
+        # stablecoin balance per app, chain and day (app metric 'stables_balance', read by api_json_creation at 05:30)
+        # full rebuild with current OLI labels, so label changes and backfills reach all dates
+        # CONCURRENTLY: readers are not blocked during the refresh (needs the unique index on the view)
+        db_connector.execute_query("REFRESH MATERIALIZED VIEW CONCURRENTLY public.vw_stables_balance_apps_materialized;")
+        print("Refreshed vw_stables_balance_apps_materialized")
+
+    run_stables_balances() >> refresh_stables_balance_apps()
 
 etl()

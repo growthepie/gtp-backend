@@ -2172,7 +2172,11 @@ class JSONCreation():
             select 
                 fact.*,
                 greatest(aa.daa, 1) AS daa,
-                greatest(aa.prev_daa, 0) AS prev_daa
+                greatest(aa.prev_daa, 0) AS prev_daa,
+                -- 0 for apps without stablecoin data (all OLI-mapped addresses are measured), like prev_txcount / prev_daa
+                COALESCE(st.stables_balance_usd, 0) AS stables_balance_usd,
+                COALESCE(st.prev_stables_balance_usd, 0) AS prev_stables_balance_usd,
+                COALESCE(st.stables_balance_eth, 0) AS stables_balance_eth
             from apps_mat fact
             LEFT JOIN (
                 SELECT 
@@ -2186,6 +2190,22 @@ class JSONCreation():
                     AND fact.origin_key IN ({chains_str})
                 GROUP BY 1, 2
             ) aa USING (owner_project, origin_key)
+            -- stablecoin balance (vw_stables_balance_apps_materialized): balance on the latest day, and {timeframe} days earlier for the change
+            LEFT JOIN (
+                SELECT
+                    f.owner_project,
+                    f.origin_key,
+                    SUM(f.stables_balance_usd) FILTER (WHERE f."date" = l."date") AS stables_balance_usd,
+                    SUM(f.stables_balance_usd) FILTER (WHERE f."date" = l."date" - {timeframe}) AS prev_stables_balance_usd,
+                    SUM(f.stables_balance_eth) FILTER (WHERE f."date" = l."date") AS stables_balance_eth
+                FROM public.vw_stables_balance_apps_materialized f
+                CROSS JOIN (
+                    SELECT MAX("date") AS "date" FROM public.vw_stables_balance_apps_materialized WHERE "date" < current_date
+                ) l
+                WHERE f."date" IN (l."date", l."date" - {timeframe})
+                    AND f.origin_key IN ({chains_str})
+                GROUP BY 1, 2
+            ) st USING (owner_project, origin_key)
         """
 
         with self.db_connector.engine.connect() as connection:
@@ -2387,6 +2407,21 @@ class JSONCreation():
 
             df_fact_apps['date'] = pd.to_datetime(df_fact_apps['date']).dt.tz_localize('UTC')
             df = pd.concat([df, df_fact_apps], ignore_index=True)
+
+            ## stablecoin balance of the app (app metric 'stables_balance'), long format like fact_kpis_apps
+            exec_string_stables = f"""
+                SELECT f.origin_key, f."date", v.metric_key, v.value
+                FROM vw_stables_balance_apps_materialized f
+                CROSS JOIN LATERAL (VALUES ('stables_balance_usd', f.stables_balance_usd), ('stables_balance_eth', f.stables_balance_eth)) AS v(metric_key, value)
+                WHERE f.owner_project = '{owner_project}'
+                    AND f.origin_key IN ({chains_str})
+                    AND f."date" < current_date
+            """
+            with self.db_connector.engine.connect() as connection:
+                df_stables = pd.read_sql(exec_string_stables, connection)
+            if not df_stables.empty:
+                df_stables['date'] = pd.to_datetime(df_stables['date']).dt.tz_localize('UTC')
+                df = pd.concat([df, df_stables], ignore_index=True)
 
         ## datetime to unix timestamp using timestamp() function
         df['unix'] = df['date'].apply(lambda x: x.timestamp() * 1000)
@@ -2600,7 +2635,7 @@ class JSONCreation():
         return val
     
     def create_kpi_cards_dict(self, df: pd.DataFrame):
-        ordered_metrics = ['txcount', 'daa', 'gas_fees', 'success_rate', 'market_cap', 'token_price', 'token_volume']
+        ordered_metrics = ['txcount', 'daa', 'gas_fees', 'success_rate', 'stables_balance', 'market_cap', 'token_price', 'token_volume']
         
         kpi_cards_dict = {}
         start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')

@@ -610,6 +610,26 @@ gtp_metrics_new = {
                 'chain_specific': False,
                 'toggles': ['absolute']
             }
+            ,'stables_balance': {
+                'name': 'Stablecoin Balance',
+                'icon': 'metrics-stablecoin-market-cap',
+                'category': 'value-locked',
+                'fundamental': False,
+                'description': 'Value of stablecoins held by contracts and addresses that are mapped to the application, at the end of each day.',
+                'metric_keys': ['stables_balance_usd', 'stables_balance_eth'],
+                'units': {
+                    'usd': {'decimals': 0, 'decimals_tooltip': 0, 'agg_tooltip': True},
+                    'eth': {'decimals': 2, 'decimals_tooltip': 2, 'agg_tooltip': True}
+                },
+                'avg': False,
+                'all_l2s_aggregate': 'sum',
+                'monthly_agg': 'avg',
+                'max_date_fill' : False,
+                'source': ['RPC', 'OLI'],
+                'hourly_available': False,
+                'chain_specific': True,
+                'toggles': ['absolute', 'stacked', 'percentage']
+            }
         }
         
         # Eth is Money metrics (on Ethereum Level)
