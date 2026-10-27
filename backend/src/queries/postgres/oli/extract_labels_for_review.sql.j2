@@ -1,7 +1,7 @@
 {#
     Get all attestations from external attesters that have a 'contract_name', 'owner_project' or 'usage_category' tag assigned to a label. Labels are reviewed and reattested via airtable.
     - Filters out tag_ids that are not contract_name, owner_project, usage_category
-    - Filters out attestations made by growthepie.attest or automated growthepie labelers
+    - Filters out attestations made by growthepie.attest, automated growthepie labelers or attesters trusted directly via our trust list
     - Filters out tag values already superseded by a newer growthepie.attest label
 
     Parameters:
@@ -21,6 +21,7 @@ WITH filtered_labels AS (
     AND attester != decode('aDbf2b56995b57525Aa9a45df19091a2C5a2A970', 'hex') -- OLI_automated_labeler
     AND attester != decode('ab81887E560e7C7b5993cE45D1c584d7FC22e898', 'hex') -- OLI_automated_labeler_trading
     AND attester != decode('f2d1ec252d947e265d5f9565ec32b902af6838b0', 'hex') -- gtp auto (Verifier Alliance sync)
+    AND attester != decode('5EEb06b8DE73b42e19dD73DA3f34739719A03de4', 'hex') -- Martin (trusted directly via growthepie trust list)
     AND chain_id IN (SELECT caip2 FROM sys_main_conf)
     AND tag_id IN ('contract_name', 'owner_project', 'usage_category')
     AND NULLIF(BTRIM(tag_value), '') IS NOT NULL
