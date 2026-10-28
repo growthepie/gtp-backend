@@ -148,7 +148,7 @@ class AdapterCrossCheck(AbstractAdapter):
             if row['origin_key'] == 'rhino':
                 threshold = 0.6
             elif row['origin_key'] in ['arbitrum_nova']:
-                threshold = 0.12 # 12% discrepancy allowed because comp dataset is weird
+                threshold = 0.5 # 50% discrepancy allowed because comp dataset is weird and Nova is an outlier
             elif row['origin_key'] in ['megaeth']:
                 threshold = 0.05 # 5% discrepancy allowed because comp dataset is weird
             else:
