@@ -2509,9 +2509,31 @@ class JSONCreation():
         df['unix'] = df['hour'].apply(lambda x: x.timestamp() * 1000)
         # fill NaN values with 0
         df['value'] = df['value'].fillna(0)
-        
+
         return df
-    
+
+    def add_stables_balance_hourly(self, df:pd.DataFrame, df_hourly:pd.DataFrame):
+        ## stablecoin balances are only stored daily (end of day): derive hourly values by carrying the last known balance forward.
+        ## The balance of date D is known from D+1 00:00 UTC, so every hour shows the latest end-of-day balance before it.
+        mks = self.app_metrics['stables_balance']['metric_keys']
+        df_stables = df[df['metric_key'].isin(mks)]
+        if df_stables.empty:
+            return df_hourly
+
+        ## same 14-day window as load_app_data_hourly, ending at the latest hour of the other hourly metrics
+        end_hour = df_hourly['hour'].max() if not df_hourly.empty else pd.Timestamp.now(tz='UTC').floor('h')
+        hours = pd.date_range(end=end_hour, start=pd.Timestamp.now(tz='UTC').floor('h') - timedelta(days=14), freq='h')
+
+        df_wide = df_stables.assign(hour=df_stables['date'] + timedelta(days=1)).pivot_table(index='hour', columns=['origin_key', 'metric_key'], values='value', aggfunc='sum')
+        df_wide = df_wide.reindex(df_wide.index.union(hours)).ffill().loc[hours]
+        df_wide.index.name = 'hour'
+
+        df_new = df_wide.stack(level=[0, 1], future_stack=True).rename('value').reset_index()
+        df_new = df_new.dropna(subset=['value'])
+        df_new['unix'] = df_new['hour'].apply(lambda x: x.timestamp() * 1000)
+
+        return pd.concat([df_hourly, df_new], ignore_index=True)
+
     def get_app_contracts(self, owner_project:str, chains:list, days:int):
         chains_str = ', '.join([f"'{chain}'" for chain in chains])
 
@@ -2781,6 +2803,7 @@ class JSONCreation():
     def create_app_details_json(self, project:str, timeframes, is_all=False):
         df = self.load_app_data(project, self.chains_list_in_api_apps)
         df_hourly = self.load_app_data_hourly(project, self.chains_list_in_api_apps)
+        df_hourly = self.add_stables_balance_hourly(df, df_hourly)
 
         df_txcount_30d = df[(df["metric_key"] == "txcount") & (df["date"] >= datetime.now(timezone.utc) - timedelta(days=30))]
         origin_keys_ordered = df_txcount_30d.groupby('origin_key')['value'].sum().sort_values(ascending=False).index.tolist()

@@ -552,7 +552,7 @@ def utility_archive_delete():
         for table_name, origin_keys in sorted(archive_tables_by_name.items())
     }
     keep_days_default = 20 # keep this many days in Postgres
-    keep_days_hourly_default = 10 # for hourly tables, keep fewer days to reduce deletion load
+    keep_days_hourly_default = 15 # for hourly tables, keep fewer days to reduce deletion load
     query_start_override_default = None # e.g. '2024-01-01' to override query start date
     diff_threshold_default = 10 # max allowed difference between BQ and Postgres counts
     batch_size_default = 10_000 # delete this many blocks at once
