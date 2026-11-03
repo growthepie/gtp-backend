@@ -2610,6 +2610,55 @@ class JSONCreation():
         df = db_addresses_to_checksummed_addresses(df, ['address'])
 
         return df
+
+    def get_app_contracts_stables_balance(self, chains:list):
+        ## stablecoin balance per app contract on the latest measured day of each chain, for all apps at once (pricing the
+        ## stablecoins once instead of per app). Same day, labels and prices as vw_stables_balance_apps_materialized,
+        ## so the contracts of an app sum up to its 'stables_balance' metric
+        chains_str = ', '.join([f"'{chain}'" for chain in chains])
+
+        exec_string = f"""
+            WITH latest AS (
+                SELECT origin_key, MAX("date") AS "date"
+                FROM vw_stables_balance_apps_materialized
+                WHERE "date" < current_date
+                    AND origin_key IN ({chains_str})
+                GROUP BY 1
+            ),
+            prices AS (
+                SELECT DISTINCT ON ("date", origin_key, token_id)
+                    "date",
+                    origin_key,
+                    token_id,
+                    value_usd / NULLIF(value, 0) AS price_usd
+                FROM vw_fact_stables_mcap_v2
+                WHERE metric_key IN ('total_supply', 'track_on_l1')
+                    AND value > 0
+                    AND origin_key IN ({chains_str})
+                    AND "date" >= (SELECT MIN("date") FROM latest)
+                ORDER BY "date", origin_key, token_id, metric_key
+            )
+            SELECT
+                l.owner_project,
+                b.address,
+                b.origin_key,
+                SUM(b.balance * COALESCE(p.price_usd, CASE WHEN s.fiat = 'usd' THEN 1 END)) AS stables_balance_usd,
+                SUM(b.balance * COALESCE(p.price_usd, CASE WHEN s.fiat = 'usd' THEN 1 END)) / MAX(e.value) AS stables_balance_eth
+            FROM fact_stables_balances b
+            JOIN latest USING (origin_key, "date")
+            JOIN vw_oli_label_pool_gold_pivoted_cross_chain_v1 l
+                ON l.address = b.address AND l.origin_key = b.origin_key AND l.owner_project IS NOT NULL
+            LEFT JOIN sys_stables_v2 s ON s.token_id = b.token_id
+            LEFT JOIN prices p ON p."date" = b."date" AND p.origin_key = b.origin_key AND p.token_id = b.token_id
+            LEFT JOIN fact_kpis e ON e."date" = b."date" AND e.metric_key = 'price_usd' AND e.origin_key = 'ethereum' AND e.value > 0
+            GROUP BY 1, 2, 3
+        """
+        with self.db_connector.engine.connect() as connection:
+            df = pd.read_sql(exec_string, connection)
+
+        df = db_addresses_to_checksummed_addresses(df, ['address'])
+
+        return df
     
     def get_active_addresses_val(self, owner_project:str, origin_key:str, timeframe:int):
         exec_string = text(
@@ -2810,11 +2859,15 @@ class JSONCreation():
 
             ## Contracts NEW
             app_dict['contracts_table'] = {}
-            for timeframe in timeframes: 
+            ## stablecoin balance is a point-in-time value (latest measured day), the same for every timeframe
+            contracts_stables = self.app_contracts_stables[self.app_contracts_stables['owner_project'] == project].drop(columns='owner_project')
+            for timeframe in timeframes:
                 timeframe_key = f'{timeframe}d' if timeframe != 'max' else 'max'
                 days = timeframe if timeframe != 'max' else 9999
-                
+
                 contracts = self.get_app_contracts(project, self.chains_list_in_api_apps, days)
+                contracts = contracts.merge(contracts_stables, on=['address', 'origin_key'], how='left')
+                contracts[['stables_balance_usd', 'stables_balance_eth']] = contracts[['stables_balance_usd', 'stables_balance_eth']].fillna(0)
                 contract_dict = {
                     'types': contracts.columns.to_list(),
                     'data': contracts.values.tolist()
@@ -2843,6 +2896,9 @@ class JSONCreation():
     def run_app_details_jsons(self, owner_projects:list, is_all=False):
         timeframes = [1,7,30,90,180,365,'max']
         counter = 1
+
+        ## stablecoin balances per contract for all apps, loaded once (used in create_app_details_json)
+        self.app_contracts_stables = self.get_app_contracts_stables_balance(self.chains_list_in_api_apps)
 
         ## run steps in parallel
         with ThreadPoolExecutor() as executor:
