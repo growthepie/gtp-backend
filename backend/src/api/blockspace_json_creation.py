@@ -195,7 +195,56 @@ class BlockspaceJSONCreation():
         with self.db_connector.engine.connect() as conn:
             df = pd.read_sql(exec_string, conn)
         return df
-    
+
+    ##### STABLECOIN BALANCE #####
+    STABLES_COLS = ['stables_balance_usd', 'stables_balance_eth']
+
+    def get_stables_balance_daily_data(self, category_type, origin_keys:list):
+        ## daily stablecoin balance per chain and main (or sub) category from vw_stables_balance_categories_materialized.
+        ## Only chains with stablecoin balance tracking are returned. Returns an empty df if the view is missing,
+        ## so the blockspace export keeps working (stables columns are null then).
+        sub_category_key_str = "s.category_id AS sub_category_key," if category_type == 'sub_category' else ""
+        group_by = "1, 2, 3, 4" if category_type == 'sub_category' else "1, 2, 3"
+        exec = f"""
+            SELECT
+                s."date",
+                s.origin_key,
+                bcm.main_category_id AS main_category_key,
+                {sub_category_key_str}
+                SUM(s.stables_balance_usd) AS stables_balance_usd,
+                SUM(s.stables_balance_eth) AS stables_balance_eth
+            FROM public.vw_stables_balance_categories_materialized s
+            INNER JOIN vw_oli_category_mapping bcm USING (category_id)
+            WHERE s."date" < DATE_TRUNC('day', NOW())
+                AND s.origin_key IN ('{"','".join(origin_keys)}')
+            GROUP BY {group_by}
+        """
+        try:
+            with self.db_connector.engine.connect() as conn:
+                df = pd.read_sql(exec, conn)
+        except Exception as e:
+            print(f'..WARNING: could not load stablecoin balances per category, stables columns will be null: {e}')
+            cols = ['date', 'origin_key', 'main_category_key'] + (['sub_category_key'] if category_type == 'sub_category' else []) + self.STABLES_COLS
+            return pd.DataFrame(columns=cols)
+
+        df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC')
+        df['unix'] = df['date'].apply(lambda x: x.timestamp() * 1000)
+        return df
+
+    def get_stables_balance_timeframe(self, stables_daily_df, timeframe, category_cols:list):
+        ## average daily stablecoin balance per chain and category over the timeframe (a balance is a stock, so it's
+        ## averaged instead of summed like gas fees / txcount). Share = category balance / balance of all tracked addresses
+        ## of the chain (incl. unlabeled), analogous to gas_fees_share.
+        df = stables_daily_df
+        if timeframe != 'max':
+            df = df[df['date'] >= pd.Timestamp.now(tz='UTC').normalize() - pd.Timedelta(days=timeframe)]
+        days = df.groupby('origin_key')['date'].nunique().rename('days').reset_index()
+        agg = df.groupby(['origin_key'] + category_cols)[self.STABLES_COLS].sum().reset_index().merge(days, on='origin_key')
+        agg[self.STABLES_COLS] = agg[self.STABLES_COLS].div(agg['days'], axis=0)
+        total_usd = agg.groupby('origin_key')['stables_balance_usd'].transform('sum')
+        agg['stables_balance_share'] = (agg['stables_balance_usd'] / total_usd.where(total_usd != 0)).fillna(0)
+        return agg.drop(columns='days')
+
     ##### FILE HANDLERS #####
     def save_to_json(self, data, path, minify=False):
         #create directory if not exists
@@ -320,6 +369,12 @@ class BlockspaceJSONCreation():
         ## put all origin_keys in a list where in_api is True
         chain_keys = [chain.origin_key for chain in self.main_conf if chain.api_in_main == True and 'blockspace' not in chain.api_exclude_metrics]
 
+        ## stablecoin balance per main category for all chains (once), 'all_l2s' = sum over chain_keys
+        stables_daily_df = self.get_stables_balance_daily_data('main_category', chain_keys)
+        stables_daily_all = stables_daily_df.groupby(['date', 'main_category_key'])[self.STABLES_COLS].sum(min_count=1).reset_index().assign(origin_key='all_l2s')
+        stables_daily_df = pd.concat([stables_daily_df, stables_daily_all], ignore_index=True)
+        stables_timeframe_dfs = {timeframe: self.get_stables_balance_timeframe(stables_daily_df, timeframe, ['main_category_key']) for timeframe in overview_timeframes}
+
         #for chain_key in config:
         for chain in self.all_l2_config:
             origin_key = chain.origin_key
@@ -374,7 +429,11 @@ class BlockspaceJSONCreation():
                         "txcount_absolute",
                         "gas_fees_share_eth",
                         "gas_fees_share_usd",
-                        "txcount_share"
+                        "txcount_share",
+                        ## average daily balance over the timeframe, null for chains without stablecoin balance tracking
+                        "stables_balance_usd_absolute",
+                        "stables_balance_eth_absolute",
+                        "stables_balance_share"
                     ],
                     # data for timeframes will be added in the for loop below
                 },
@@ -382,11 +441,16 @@ class BlockspaceJSONCreation():
                     "types": [
                         "gas_fees_eth_absolute",
                         "gas_fees_usd_absolute",
-                        "txcount_absolute"
+                        "txcount_absolute",
+                        "stables_balance_usd_absolute",
+                        "stables_balance_eth_absolute"
                     ],
                     # data for timeframes will be added in the for loop below
                 }
             }
+
+            ## chains without stablecoin balance tracking get null stables values (instead of 0)
+            has_stables = origin_key in stables_daily_df['origin_key'].values
 
             for main_category_key in main_category_keys:
                 # filter the dataframes accordingly, we'll use the chain_totals_df to calculate the gas_fees_share and txcount_share
@@ -417,11 +481,20 @@ class BlockspaceJSONCreation():
                     # get the averages for timeframe and main_category_key
                     averages = chain_timeframe_overview_dfs[timeframe].loc[(chain_timeframe_overview_dfs[timeframe].main_category_key == main_category_key)][[
                         'gas_fees_eth', 'gas_fees_usd', 'txcount', 'gas_fees_share_eth', 'gas_fees_share_usd', 'txcount_share']]
+                    gas_values = averages.values.tolist()[0] if not averages.empty else [0] * 6
+
+                    # stablecoin balance for timeframe and main_category_key
+                    stables = stables_timeframe_dfs[timeframe]
+                    stables = stables.loc[(stables.origin_key == origin_key) & (stables.main_category_key == main_category_key)][self.STABLES_COLS + ['stables_balance_share']]
+                    if not has_stables:
+                        stables_values = [None] * 3
+                    else:
+                        stables_values = stables.values.tolist()[0] if not stables.empty else [0] * 3
 
                     # if we have any non-zero values, add list of averages for each timeframe
-                    if averages.any().any():
-                        chain_dict["overview"][timeframe_key][main_category_key]['data'] = averages.values.tolist()[0]
-                    
+                    if any(v for v in gas_values + stables_values):
+                        chain_dict["overview"][timeframe_key][main_category_key]['data'] = gas_values + stables_values
+
                     ## only add contracts to all field in dicts
                     if origin_key == 'all_l2s':
                         print(f"..adding contracts for {timeframe_key} and {main_category_key}")
@@ -443,7 +516,10 @@ class BlockspaceJSONCreation():
                 if timeframe_key not in chain_dict["totals"]:
                     chain_dict["totals"][timeframe_key] = {}
 
-                chain_dict["totals"][timeframe_key]['data'] = chain_timeframe_totals_dfs[timeframe][['gas_fees_eth', 'gas_fees_usd', 'txcount']].values.tolist()[0]
+                stables = stables_timeframe_dfs[timeframe]
+                stables_totals = stables.loc[stables.origin_key == origin_key, self.STABLES_COLS].sum().tolist() if has_stables else [None] * 2
+
+                chain_dict["totals"][timeframe_key]['data'] = chain_timeframe_totals_dfs[timeframe][['gas_fees_eth', 'gas_fees_usd', 'txcount']].values.tolist()[0] + stables_totals
 
             overview_dict['data']['chains'][origin_key] = chain_dict
 
@@ -864,6 +940,17 @@ class BlockspaceJSONCreation():
         return df
 
 
+    def _merge_stables(self, df, stables_df, on:list):
+        ## left-join the stablecoin balance columns onto a blockspace df: 0 where the chain is tracked (for daily data: on
+        ## and after its first tracked day) but the category held nothing, null where the chain isn't tracked
+        cols = [c for c in stables_df.columns if c.startswith('stables_balance')]
+        df = df.reset_index(drop=True).merge(stables_df[on + cols], on=on, how='left')
+        tracked = df['origin_key'].isin(stables_df['origin_key'].unique())
+        if 'unix' in on:
+            tracked &= df['unix'] >= df['origin_key'].map(stables_df.groupby('origin_key')['unix'].min())
+        df.loc[tracked, cols] = df.loc[tracked, cols].fillna(0)
+        return df
+
     def create_blockspace_comparison_json(self):
         # create base dict
         comparison_dict = {
@@ -882,10 +969,19 @@ class BlockspaceJSONCreation():
         sub_cat_daily_df = self.get_comparison_daily_data(timeframes[-1], 'sub_category', chain_keys)
         main_cat_daily_df = self.get_comparison_daily_data(timeframes[-1], 'main_category', chain_keys)
 
+        # stablecoin balance per category (daily), merged onto the daily blockspace data
+        sub_cat_stables_daily_df = self.get_stables_balance_daily_data('sub_category', chain_keys)
+        main_cat_stables_daily_df = self.get_stables_balance_daily_data('main_category', chain_keys)
+        sub_cat_daily_df = self._merge_stables(sub_cat_daily_df, sub_cat_stables_daily_df, ['origin_key', 'main_category_key', 'sub_category_key', 'unix'])
+        main_cat_daily_df = self._merge_stables(main_cat_daily_df, main_cat_stables_daily_df, ['origin_key', 'main_category_key', 'unix'])
+
         for timeframe in timeframes:
             print(f"...processing timeframe {timeframe} days")
             sub_cat_agg_df = self.get_comparison_aggregate_data_day(timeframe, 'sub_category', chain_keys)
             main_cat_agg_df = self.get_comparison_aggregate_data_day(timeframe, 'main_category', chain_keys)
+            # average daily stablecoin balance over the timeframe
+            sub_cat_agg_df = self._merge_stables(sub_cat_agg_df, self.get_stables_balance_timeframe(sub_cat_stables_daily_df, timeframe, ['main_category_key', 'sub_category_key']), ['origin_key', 'main_category_key', 'sub_category_key'])
+            main_cat_agg_df = self._merge_stables(main_cat_agg_df, self.get_stables_balance_timeframe(main_cat_stables_daily_df, timeframe, ['main_category_key']), ['origin_key', 'main_category_key'])
             
             timeframe_key = f'{timeframe}d' if timeframe != 'max' else 'max'
 
@@ -902,11 +998,11 @@ class BlockspaceJSONCreation():
                             "list": sub_cat_agg_df[sub_cat_agg_df['main_category_key'] == main_cat]['sub_category_key'].unique().tolist() if main_cat in sub_cat_agg_df['main_category_key'].unique() else [],
                         },
                         "daily": {
-                            "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                            "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_absolute_usd", "stables_balance_absolute_eth"]
                             # daily data for each chain
                         },
                         "daily_7d_rolling":{
-                            "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                            "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_absolute_usd", "stables_balance_absolute_eth"]
                             # daily data for each chain
                         },
                         "type": "main_category"
@@ -922,7 +1018,7 @@ class BlockspaceJSONCreation():
                     
                     },
                     "data": {
-                        "types": ["gas_fees_absolute_eth", "gas_fees_absolute_usd", "gas_fees_share", "txcount_absolute", "txcount_share"]
+                        "types": ["gas_fees_absolute_eth", "gas_fees_absolute_usd", "gas_fees_share", "txcount_absolute", "txcount_share", "stables_balance_absolute_usd", "stables_balance_absolute_eth", "stables_balance_share"]
                         # .. data for each chain
                     }
                 }
@@ -948,7 +1044,7 @@ class BlockspaceJSONCreation():
                 for chain in main_cat_agg_df['origin_key'].unique():
                     chain_df = main_cat_agg_df[(main_cat_agg_df['origin_key'] == chain) & (main_cat_agg_df['main_category_key'] == main_cat)]
                     if chain_df.shape[0] > 0:
-                        comparison_dict['data'][main_cat]['aggregated'][timeframe_key]['data'][chain] = chain_df[['gas_fees_eth', 'gas_fees_usd', 'txcount', 'gas_fees_share', 'txcount_share']].values.tolist()[0]
+                        comparison_dict['data'][main_cat]['aggregated'][timeframe_key]['data'][chain] = chain_df[['gas_fees_eth', 'gas_fees_usd', 'txcount', 'gas_fees_share', 'txcount_share', 'stables_balance_usd', 'stables_balance_eth', 'stables_balance_share']].values.tolist()[0]
 
                 # create dict for each sub category of main category
                 for sub_cat in sub_cat_agg_df[sub_cat_agg_df['main_category_key'] == main_cat]['sub_category_key'].unique():
@@ -958,11 +1054,11 @@ class BlockspaceJSONCreation():
                                 # .. keys for timeframes
                             },
                             "daily": {
-                                "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                                "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_absolute_usd", "stables_balance_absolute_eth"]
                                 # daily data for each chain
                             },
                             "daily_7d_rolling":{
-                                "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                                "types": ["unix", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_absolute_usd", "stables_balance_absolute_eth"]
                                 # daily data for each chain
                             },
                             "type": "sub_category"
@@ -970,7 +1066,7 @@ class BlockspaceJSONCreation():
 
                     comparison_dict['data'][main_cat]['subcategories'][sub_cat]['aggregated'][timeframe_key] = {
                         "data": {
-                            "types": ["gas_fees_absolute_eth", "gas_fees_absolute_usd", "gas_fees_share", "txcount_absolute", "txcount_share"]
+                            "types": ["gas_fees_absolute_eth", "gas_fees_absolute_usd", "gas_fees_share", "txcount_absolute", "txcount_share", "stables_balance_absolute_usd", "stables_balance_absolute_eth", "stables_balance_share"]
                             # .. data for each chain
                         }
                     }
@@ -979,7 +1075,7 @@ class BlockspaceJSONCreation():
                     for chain in sub_cat_agg_df['origin_key'].unique():
                         chain_df = sub_cat_agg_df[(sub_cat_agg_df['origin_key'] == chain) & (sub_cat_agg_df['sub_category_key'] == sub_cat)]
                         if chain_df.shape[0] > 0:
-                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['aggregated'][timeframe_key]['data'][chain] = chain_df[['gas_fees_eth', 'gas_fees_usd', 'gas_fees_share', 'txcount', 'txcount_share']].values.tolist()[0]
+                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['aggregated'][timeframe_key]['data'][chain] = chain_df[['gas_fees_eth', 'gas_fees_usd', 'gas_fees_share', 'txcount', 'txcount_share', 'stables_balance_usd', 'stables_balance_eth', 'stables_balance_share']].values.tolist()[0]
         
         # add daily data for each chain for each main category
         for chain in main_cat_daily_df['origin_key'].unique():
@@ -993,22 +1089,24 @@ class BlockspaceJSONCreation():
                     ## for values in column 'gas_fees_usd' keep only 2 decimals
                     chain_df['gas_fees_usd'] = chain_df['gas_fees_usd'].apply(lambda x: round(x, 2))
                     
-                    comparison_dict['data'][main_cat]['daily'][chain] = chain_df[['unix', 'gas_fees_eth', 'gas_fees_usd', 'txcount']].values.tolist()
+                    comparison_dict['data'][main_cat]['daily'][chain] = chain_df[['unix', 'gas_fees_eth', 'gas_fees_usd', 'txcount', 'stables_balance_usd', 'stables_balance_eth']].values.tolist()
                     
                     # calculate rolling 7d average
                     chain_df['7d_gas_fees_eth'] = chain_df['gas_fees_eth'].rolling(7).mean()
                     chain_df['7d_gas_fees_usd'] = chain_df['gas_fees_usd'].rolling(7).mean()
                     chain_df['7d_txcount'] = chain_df['txcount'].rolling(7).mean()
+                    chain_df['7d_stables_balance_usd'] = chain_df['stables_balance_usd'].rolling(7).mean()
+                    chain_df['7d_stables_balance_eth'] = chain_df['stables_balance_eth'].rolling(7).mean()
 
-                    # drop nan values
-                    chain_df.dropna(inplace=True)
+                    # drop nan values (stables stay null before the chain's first tracked day)
+                    chain_df.dropna(subset=['7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount'], inplace=True)
                     
                     ## for values in column 'gas_fees_eth' keep only 5 decimals
                     chain_df['7d_gas_fees_eth'] = chain_df['7d_gas_fees_eth'].apply(lambda x: round(x, 5))
                     ## for values in column 'gas_fees_usd' keep only 2 decimals
                     chain_df['7d_gas_fees_usd'] = chain_df['7d_gas_fees_usd'].apply(lambda x: round(x, 2))
                     
-                    comparison_dict['data'][main_cat]['daily_7d_rolling'][chain] = chain_df[['unix', '7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount']].values.tolist()
+                    comparison_dict['data'][main_cat]['daily_7d_rolling'][chain] = chain_df[['unix', '7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount', '7d_stables_balance_usd', '7d_stables_balance_eth']].values.tolist()
 
                     # add daily data for each chain for each sub category of main category
                     for sub_cat in sub_cat_daily_df[sub_cat_daily_df['main_category_key'] == main_cat]['sub_category_key'].unique():
@@ -1021,15 +1119,17 @@ class BlockspaceJSONCreation():
                             ## for values in column 'gas_fees_usd' keep only 2 decimals
                             chain_df['gas_fees_usd'] = chain_df['gas_fees_usd'].apply(lambda x: round(x, 2))
 
-                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['daily'][chain] = chain_df[['unix', 'gas_fees_eth', 'gas_fees_usd', 'txcount']].values.tolist()
+                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['daily'][chain] = chain_df[['unix', 'gas_fees_eth', 'gas_fees_usd', 'txcount', 'stables_balance_usd', 'stables_balance_eth']].values.tolist()
                             
                             # calculate rolling 7d average
                             chain_df['7d_gas_fees_eth'] = chain_df['gas_fees_eth'].rolling(7).mean()
                             chain_df['7d_gas_fees_usd'] = chain_df['gas_fees_usd'].rolling(7).mean()
                             chain_df['7d_txcount'] = chain_df['txcount'].rolling(7).mean()
+                            chain_df['7d_stables_balance_usd'] = chain_df['stables_balance_usd'].rolling(7).mean()
+                            chain_df['7d_stables_balance_eth'] = chain_df['stables_balance_eth'].rolling(7).mean()
 
-                            # drop nan values
-                            chain_df.dropna(inplace=True)
+                            # drop nan values (stables stay null before the chain's first tracked day)
+                            chain_df.dropna(subset=['7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount'], inplace=True)
 
                             ## for values in column 'gas_fees_eth' keep only 5 decimals
                             chain_df['7d_gas_fees_eth'] = chain_df['7d_gas_fees_eth'].apply(lambda x: round(x, 5))
@@ -1037,7 +1137,7 @@ class BlockspaceJSONCreation():
                             chain_df['7d_gas_fees_usd'] = chain_df['7d_gas_fees_usd'].apply(lambda x: round(x, 2))
 
                             #comparison_dict['data'][main_cat]['subcategories'][sub_cat]['daily_7d_rolling'][chain] = chain_df[['unix', '7d_gas_fees_eth', '7d_gas_fees_usd', '7d_gas_fees_share', '7d_txcount', '7d_txcount_share']].values.tolist()
-                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['daily_7d_rolling'][chain] = chain_df[['unix', '7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount']].values.tolist()
+                            comparison_dict['data'][main_cat]['subcategories'][sub_cat]['daily_7d_rolling'][chain] = chain_df[['unix', '7d_gas_fees_eth', '7d_gas_fees_usd', '7d_txcount', '7d_stables_balance_usd', '7d_stables_balance_eth']].values.tolist()
 
         comparison_dict = fix_dict_nan(comparison_dict, f'blockspace/category_comparison', False)
 

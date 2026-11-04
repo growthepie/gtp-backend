@@ -55,6 +55,15 @@ def etl():
         db_connector.execute_query("REFRESH MATERIALIZED VIEW CONCURRENTLY public.vw_stables_balance_apps_materialized;")
         print("Refreshed vw_stables_balance_apps_materialized")
 
-    run_stables_balances() >> refresh_stables_balance_apps()
+    @task()
+    def refresh_stables_balance_categories():
+        from src.db_connector import DbConnector
+        db_connector = DbConnector()
+
+        # stablecoin balance per usage category, chain and day (blockspace overview + category comparison, read by api_json_creation at 05:30)
+        db_connector.execute_query("REFRESH MATERIALIZED VIEW CONCURRENTLY public.vw_stables_balance_categories_materialized;")
+        print("Refreshed vw_stables_balance_categories_materialized")
+
+    run_stables_balances() >> [refresh_stables_balance_apps(), refresh_stables_balance_categories()]
 
 etl()
