@@ -211,7 +211,7 @@ class AdapterStablecoinBalances(AbstractAdapter):
         print(f"{origin_key}: discovered {len(merged)} candidates ({n_new} new, {len(revive)} unpruned).")
 
     # sources that say something about balances (or ownership): finding a pruned address again unprunes it
-    UNPRUNE_SOURCES = {'oli', 'dune', 'blockscout', 'dune_history', 'dune_holders'}
+    UNPRUNE_SOURCES = {'oli', 'dune', 'blockscout', 'dune_history', 'dune_holders', 'balance_history'}
 
     def prune(self, origin_key: str, min_usd: float = 10_000, lookback_days: int = 30, min_measured_days: int = 14):
         """
@@ -305,6 +305,56 @@ class AdapterStablecoinBalances(AbstractAdapter):
         df = pd.concat(frames).drop_duplicates('address')
         print(f"{origin_key}: 'dune_history' found {len(df)} addresses over {n_windows} windows of {window_days}d.")
         return df
+
+    def revive_historical(self, origin_key: str, since: date, step_days: int = 30, min_usd: float = 100_000,
+                          min_supply_share: float = 0.01, extra_addresses: list = None) -> list:
+        """
+        Historical backfills only measure current candidates, so addresses that were large holders in the past but were
+        pruned since (or never discovered) are missing from older dates. This reads the balances of all pruned candidates
+        (plus extra_addresses, e.g. from _discover_dune_history) on sample dates every step_days from `since`, for tokens with
+        at least min_supply_share of the chain's supply on any sample date, and merges back every address that held at
+        least min_usd on a sample date (source 'balance_history', which unprunes). Run measure() with a matching `days` after.
+        Example (after a backfill to 2025-01-01):
+            dune = ad._discover_dune_history('base', 10_000, 2, 100_000, window_days=30, token_ids=ad._get_dominant_token_ids('base', dates))
+            ad.revive_historical('base', date(2025, 1, 1), extra_addresses=list(dune['address']))
+            ad.measure('base', days=(date.today() - date(2025, 1, 1)).days)
+        """
+        blocks = self._get_end_of_day_blocks(origin_key, since)
+        sample_dates = [d for d in (since + timedelta(days=step_days * i) for i in range((date.today() - since).days // step_days + 1)) if d in blocks]
+        cand = self.get_candidates(origin_key)
+        known = set(cand['address'])
+        addresses = sorted(set(cand.loc[cand['pruned_on'].notna(), 'address']) | ({a.lower() for a in extra_addresses or []} - known))
+        token_ids = set(self._get_dominant_token_ids(origin_key, sample_dates, min_supply_share))
+        tokens = [t for t in self._get_tokens(origin_key) if t['token_id'] in token_ids]
+        prices = self._get_prices(origin_key)
+        print(f"{origin_key}: checking {len(addresses)} addresses x {len(tokens)} tokens on {len(sample_dates)} dates since {since}.")
+        found = set()
+        for d in sample_dates:
+            pairs = [(a, t) for t in tokens if t['max_date'] is None or d <= t['max_date'] for a in addresses if a not in t['exclude']]
+            df = self._read_balances(origin_key, pairs, blocks[d])
+            if df.empty:
+                continue
+            usd = df['balance'].astype(float) * df['token_id'].map(prices).fillna(0).astype(float)
+            hits = set(df.loc[usd >= min_usd, 'address'])
+            print(f"{origin_key} {d}: {len(hits)} addresses >= ${min_usd:,.0f} ({len(hits - found)} new).")
+            found |= hits
+        revive = sorted(found)
+        if revive:
+            self.merge_candidates(origin_key, [pd.DataFrame({'address': revive, 'source': 'balance_history'})])
+        print(f"{origin_key}: 'balance_history' revived/added {len(revive)} addresses.")
+        return revive
+
+    def _get_dominant_token_ids(self, origin_key: str, dates: list, min_supply_share: float = 0.01) -> list:
+        """ token_ids with at least min_supply_share of the chain's stablecoin supply on any of `dates` """
+        df = self.db_connector.execute_query(f"""
+            SELECT DISTINCT token_id FROM (
+                SELECT token_id, value_usd / SUM(value_usd) OVER (PARTITION BY "date") AS share
+                FROM public.vw_fact_stables_mcap_v2
+                WHERE origin_key = '{origin_key}' AND metric_key IN ('total_supply', 'track_on_l1') AND value_usd > 0
+                  AND "date" IN ({','.join(f"'{d}'" for d in dates)})
+            ) s WHERE share >= {min_supply_share}
+        """, load_df=True)
+        return sorted(df['token_id'])
 
     def _blockscout_due(self, origin_key: str, weekday) -> bool:
         """ Blockscout runs on a chain's first run (no candidate found by it yet) and then on `weekday` (None = always). """
