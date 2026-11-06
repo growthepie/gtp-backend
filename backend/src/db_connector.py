@@ -1553,12 +1553,16 @@ class DbConnector:
         """
         function for the blockspace overview json and the single chain blockspace jsons
         it returns the top 100 contracts by gas fees for the given main category
-        and the top 20 contracts by gas fees for each chain in the main category
-        
+        and the top 20 contracts by gas fees, by txcount and by stablecoin balance for each chain in the main category
+
+        stables_balance_usd/eth = stablecoin balance of the contract on the latest measured day of its chain (point-in-time,
+        the same for every timeframe; same source and pricing as vw_stables_balance_apps_materialized).
+        0 if the contract holds no stablecoins, null for chains without stablecoin balance tracking.
         """
         def get_contracts_overview(self, main_category, days, origin_keys, contract_limit=100):
-                
+
                 date_string = f"and date >= DATE_TRUNC('day', NOW() - INTERVAL '{days} days')" if days != 'max' else ''
+                origin_keys_string = "','".join(origin_keys)
 
                 if main_category.lower() != 'unlabeled':
                         main_category_string = f"and bcm.main_category_id = lower('{main_category}')" 
@@ -1578,8 +1582,8 @@ class DbConnector:
                         """       
 
                 exec_string = f'''
-                        with top_contracts as (
-                                SELECT 
+                        with contracts_activity as (
+                                SELECT
                                         cl.address,
                                         cl.origin_key,
                                         UPPER(LEFT(bl.contract_name , 1)) || SUBSTRING(bl.contract_name FROM 2) as contract_name,
@@ -1597,14 +1601,61 @@ class DbConnector:
                                         date < DATE_TRUNC('day', NOW())
                                         {date_string}
                                         {main_category_string}
-                                        and cl.origin_key IN ('{"','".join(origin_keys)}')
+                                        and cl.origin_key IN ('{origin_keys_string}')
                                 group by 1,2,3,4,5,6,7,8
-                                order by gas_fees_eth  desc
                                 ),
-                                
+
+                        -- latest measured stablecoin balance day per chain (chains without tracking have no row)
+                        stables_latest as MATERIALIZED (
+                                SELECT origin_key, MAX("date") AS "date"
+                                FROM vw_stables_balance_categories_materialized
+                                WHERE "date" < DATE_TRUNC('day', NOW())
+                                        and origin_key IN ('{origin_keys_string}')
+                                GROUP BY 1
+                                ),
+
+                        -- stablecoin prices on that day (same as vw_stables_balance_apps_materialized)
+                        stables_prices as (
+                                SELECT DISTINCT ON (m."date", m.origin_key, m.token_id)
+                                        m."date",
+                                        m.origin_key,
+                                        m.token_id,
+                                        m.value_usd / NULLIF(m.value, 0)::double precision AS price_usd
+                                FROM vw_fact_stables_mcap_v2 m
+                                JOIN stables_latest sl ON sl.origin_key = m.origin_key AND sl."date" = m."date"
+                                WHERE m.metric_key IN ('total_supply', 'track_on_l1')
+                                        and m.value > 0
+                                ORDER BY m."date", m.origin_key, m.token_id, m.metric_key
+                                ),
+
+                        -- stablecoin balance (usd and eth at that day's eth price) per address on the latest day
+                        contract_stables as MATERIALIZED (
+                                SELECT
+                                        b.address,
+                                        b.origin_key,
+                                        SUM(b.balance::double precision * COALESCE(p.price_usd, CASE WHEN s.fiat = 'usd' THEN 1 END)) AS usd,
+                                        SUM(b.balance::double precision * COALESCE(p.price_usd, CASE WHEN s.fiat = 'usd' THEN 1 END)) / MAX(e.value) AS eth
+                                FROM fact_stables_balances b
+                                JOIN stables_latest sl ON sl.origin_key = b.origin_key AND sl."date" = b."date"
+                                LEFT JOIN sys_stables_v2 s ON s.token_id = b.token_id
+                                LEFT JOIN stables_prices p ON p."date" = b."date" AND p.origin_key = b.origin_key AND p.token_id = b.token_id
+                                LEFT JOIN fact_kpis e ON e."date" = b."date" AND e.metric_key = 'price_usd' AND e.origin_key = 'ethereum' AND e.value > 0
+                                GROUP BY 1,2
+                                ),
+
+                        top_contracts as (
+                                SELECT
+                                        t.*,
+                                        CASE WHEN sl.origin_key IS NOT NULL THEN COALESCE(cs.usd, 0) END AS stables_balance_usd,
+                                        CASE WHEN sl.origin_key IS NOT NULL THEN COALESCE(cs.eth, 0) END AS stables_balance_eth
+                                FROM contracts_activity t
+                                LEFT JOIN contract_stables cs ON cs.address = t.address AND cs.origin_key = t.origin_key
+                                LEFT JOIN stables_latest sl ON sl.origin_key = t.origin_key
+                                ),
+
                         top_contracts_main_category_and_origin_key_by_gas as (
                                 SELECT
-                                        address,origin_key,contract_name,project_name,sub_category_key,sub_category_name,main_category_key,main_category_name,gas_fees_eth,gas_fees_usd,txcount,daa
+                                        address,origin_key,contract_name,project_name,sub_category_key,sub_category_name,main_category_key,main_category_name,gas_fees_eth,gas_fees_usd,txcount,daa,stables_balance_usd,stables_balance_eth
                                 FROM (
                                         SELECT
                                                 ROW_NUMBER() OVER (PARTITION BY main_category_key, origin_key ORDER BY gas_fees_eth desc) AS r,
@@ -1615,20 +1666,35 @@ class DbConnector:
 
                         top_contracts_main_category_and_origin_key_by_txcount as (
                                 SELECT
-                                        address,origin_key,contract_name,project_name,sub_category_key,sub_category_name,main_category_key,main_category_name,gas_fees_eth,gas_fees_usd,txcount,daa
+                                        address,origin_key,contract_name,project_name,sub_category_key,sub_category_name,main_category_key,main_category_name,gas_fees_eth,gas_fees_usd,txcount,daa,stables_balance_usd,stables_balance_eth
                                 FROM (
                                         SELECT
                                                 ROW_NUMBER() OVER (PARTITION BY main_category_key, origin_key ORDER BY txcount desc) AS r,
                                                 t.*
                                         FROM top_contracts t) x
                                 WHERE x.r <= 20
+                                ),
+
+                        -- contracts that hold a lot of stablecoins but send few transactions (vaults, bridges, treasuries)
+                        top_contracts_main_category_and_origin_key_by_stables as (
+                                SELECT
+                                        address,origin_key,contract_name,project_name,sub_category_key,sub_category_name,main_category_key,main_category_name,gas_fees_eth,gas_fees_usd,txcount,daa,stables_balance_usd,stables_balance_eth
+                                FROM (
+                                        SELECT
+                                                ROW_NUMBER() OVER (PARTITION BY main_category_key, origin_key ORDER BY stables_balance_usd desc) AS r,
+                                                t.*
+                                        FROM top_contracts t
+                                        WHERE t.stables_balance_usd > 0) x
+                                WHERE x.r <= 20
                                 )
-                                
+
                         select * from (select * from top_contracts order by gas_fees_eth desc limit {contract_limit}) a
-                        union 
+                        union
                         select * from top_contracts_main_category_and_origin_key_by_gas
-                        union 
+                        union
                         select * from top_contracts_main_category_and_origin_key_by_txcount
+                        union
+                        select * from top_contracts_main_category_and_origin_key_by_stables
                 '''
                 # print(main_category)
                 # print(exec_string)

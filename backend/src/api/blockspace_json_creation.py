@@ -504,9 +504,9 @@ class BlockspaceJSONCreation():
 
                         chain_dict["overview"][timeframe_key][main_category_key]['contracts'] = {
                             "data": top_contracts_gas[
-                                ['address', 'project_name', 'contract_name', "main_category_key", "sub_category_key", "origin_key", "gas_fees_eth", "gas_fees_usd", "txcount"]
+                                ['address', 'project_name', 'contract_name', "main_category_key", "sub_category_key", "origin_key", "gas_fees_eth", "gas_fees_usd", "txcount", "stables_balance_usd", "stables_balance_eth"]
                             ].values.tolist(),
-                            "types": ["address", "project_name", "name", "main_category_key", "sub_category_key", "chain", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                            "types": ["address", "project_name", "name", "main_category_key", "sub_category_key", "chain", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_usd_absolute", "stables_balance_eth_absolute"]
                         }
             
             ## add totals per chain
@@ -752,9 +752,9 @@ class BlockspaceJSONCreation():
 
                         chain_dict["overview"][timeframe_key][main_category_key]['contracts'] = {
                             "data": top_contracts_gas[
-                                ['address', 'project_name', 'contract_name', "main_category_key", "sub_category_key", "origin_key", "gas_fees_eth", "gas_fees_usd", "txcount"]
+                                ['address', 'project_name', 'contract_name', "main_category_key", "sub_category_key", "origin_key", "gas_fees_eth", "gas_fees_usd", "txcount", "stables_balance_usd", "stables_balance_eth"]
                             ].values.tolist(),
-                            "types": ["address", "project_name", "name", "main_category_key", "sub_category_key", "chain", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute"]
+                            "types": ["address", "project_name", "name", "main_category_key", "sub_category_key", "chain", "gas_fees_absolute_eth", "gas_fees_absolute_usd", "txcount_absolute", "stables_balance_usd_absolute", "stables_balance_eth_absolute"]
                         }
                     
                 ## add totals per chain
