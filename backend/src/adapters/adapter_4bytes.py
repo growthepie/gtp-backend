@@ -7,6 +7,8 @@ import getpass
 import json
 import glob
 import os
+import re
+from xml.etree import ElementTree as ET
 from eth_utils import keccak
 import tempfile
 import pickle
@@ -39,10 +41,14 @@ class Adapter4Bytes(AbstractAdapter):
         self.provider = extract_params.get('provider', 'sourcify')
         if self.provider not in ['sourcify', 'verifieralliance']:
             raise ValueError("Provider must be either 'sourcify' or 'verifieralliance'")
-        elif self.provider == 'sourcify':
-            self.base_url = "https://export.sourcify.app/"
-        else:
-            self.base_url = "https://export.verifieralliance.org/"
+        # The legacy per-provider manifest.json endpoints (export.sourcify.app /
+        # export.verifieralliance.org) have been retired and now return 404.
+        # Both Sourcify- and Verifier-Alliance-verified contracts are now published
+        # to a single combined parquet export on the Verifier Alliance GCS bucket,
+        # enumerated via an S3-style XML listing under v2/ (see
+        # docs/verifier_alliance_sync.md and adapter_verifier_alliance.py).
+        self.export_bucket_url = "https://storage.googleapis.com/verifier-alliance-parquet-export"
+        self.base_url = f"{self.export_bucket_url}/v2/"
 
         ## download all verified contracts
         # Notes: 
@@ -145,15 +151,43 @@ class Adapter4Bytes(AbstractAdapter):
 #-#-#-#-# Helper Functions #-#-#-#-#
 
     def get_master_json(self):
-        """Get the master.json from {provider} api endpoint"""
-        url = f"{self.base_url}manifest.json"
-        response = requests.get(url)
-        
-        if response.status_code == 200:
-            print(f"Successfully fetched {self.provider} master.json")
-            return response.json()
-        else:
-            raise Exception(f"Failed to fetch data from {self.provider}: {response.status_code}")
+        """List the compiled_contracts parquet files from the Verifier Alliance export.
+
+        The export is a GCS bucket without a manifest.json, so the available files are
+        discovered via the S3-style XML listing API. The return value keeps the same
+        shape as the legacy manifest ({'files': {'compiled_contracts': [...]}}) so the
+        rest of the pipeline is unchanged. Paths are returned relative to the v2/ base
+        (e.g. 'compiled_contracts/compiled_contracts_0_100.parquet') to match
+        self.base_url, which already includes the v2/ prefix.
+        """
+        prefix = "v2/compiled_contracts/"
+        key_pattern = re.compile(r"v2/compiled_contracts/compiled_contracts_\d+_\d+\.parquet")
+        files = []
+        marker = ""
+        while True:
+            response = requests.get(
+                self.export_bucket_url,
+                params={"prefix": prefix, "marker": marker, "max-keys": 1000},
+            )
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch data from {self.provider}: {response.status_code}")
+            root = ET.fromstring(response.content)
+            for item in root.findall("{*}Contents"):
+                key = item.findtext("{*}Key")
+                if key and key_pattern.fullmatch(key):
+                    # strip the v2/ prefix; self.base_url already includes it
+                    files.append(key[len("v2/"):])
+            if root.findtext("{*}IsTruncated") != "true":
+                break
+            next_marker = root.findtext("{*}NextMarker")
+            if not next_marker or next_marker == marker:
+                raise Exception("Truncated export listing without a progressing marker")
+            marker = next_marker
+
+        if not files:
+            raise Exception(f"No compiled_contracts export files found for {self.provider}")
+        print(f"Successfully listed {len(files)} compiled_contracts files from {self.provider}")
+        return {'files': {'compiled_contracts': files}}
 
     def download_parquet(self, path):
         """Download a parquet file from {provider} and return it as a Polars DataFrame."""
