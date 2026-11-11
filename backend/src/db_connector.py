@@ -3114,3 +3114,14 @@ class DbConnector:
                 df = df.melt(id_vars=['date'], var_name='metric_key', value_name='value')
                 df['origin_key'] = 'ethereum'
                 return df.set_index(['metric_key', 'origin_key', 'date'])
+
+        # Spike watch for quick bites (DAG: other_qb_spike_watch): spikes already found, to skip repeats and follow-up days.
+        def get_quick_bite_spike_events(self, days:int=30):
+                exec_string = f'''
+                        SELECT origin_key, metric_key, "date", status, slug, pr_url
+                        FROM public.quick_bite_spike_events
+                        WHERE "date" >= current_date - INTERVAL '{int(days)} days'
+                '''
+                with self.engine.connect() as conn:
+                        df = pd.read_sql(text(exec_string), conn)
+                return df

@@ -1,0 +1,16 @@
+{#
+    Daily values for the spike watch: the last {{ days }} days of each metric for each chain.
+
+    Parameters:
+    - origin_keys: chains to scan
+    - metric_keys: fact_kpis metric keys to scan
+    - days: how many days to load (baseline window + days to check)
+#}
+
+SELECT origin_key, metric_key, "date", value
+FROM public.fact_kpis
+WHERE origin_key IN ( '{{ origin_keys | join("', '") }}' )
+    AND metric_key IN ( '{{ metric_keys | join("', '") }}' )
+    AND "date" >= current_date - interval '{{ days }} days'
+    AND "date" < current_date
+ORDER BY origin_key, metric_key, "date"
