@@ -228,8 +228,6 @@ sql_queries = [
         ,*standard_evm_queries("unichain")
         ,SQLQuery(metric_key = "txcount_type4", origin_key = "unichain", jinja_path='chain_metrics/select_txcount_type4.sql.j2', query_parameters={}, currency_dependent = False)
 
-        ,*standard_evm_queries("lisk")
-
         # ## Zircuit
         # ,SQLQuery(metric_key = "txcount_comparison", origin_key = "zircuit", jinja_path='chain_metrics/select_txcount_plain.sql.j2', currency_dependent = False)
         # ,SQLQuery(metric_key = "txcount", origin_key = 'zircuit', jinja_path='chain_metrics/select_txcount.sql.j2', query_parameters={"filter_col" : "gas_price"}, currency_dependent = False)

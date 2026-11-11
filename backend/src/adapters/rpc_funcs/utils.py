@@ -680,8 +680,7 @@ def prep_dataframe_new(df, chain):
     op_chains = [
         'zora', 'base', 'optimism', 'gitcoin_pgn', 'mantle', 'mode', 'blast',
         'redstone', 'orderly', 'derive', 'karak', 'ancient8', 'kroma', 'fraxtal',
-        'cyber', 'worldchain', 'mint', 'ink', 'soneium', 'swell', 'zircuit',
-        'lisk', 'unichain'
+        'cyber', 'worldchain', 'mint', 'ink', 'soneium', 'swell', 'zircuit', 'unichain'
     ]
     default_chains = ['manta', 'metis']
     arbitrum_nitro_chains = ['arbitrum', 'gravity', 'real', 'arbitrum_nova', 'plume', 'testnet_robinhood']

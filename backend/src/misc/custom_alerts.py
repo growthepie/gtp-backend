@@ -1315,11 +1315,6 @@ CHAIN_LISTING_EVENTS = [
         "twitter_post": "https://x.com/growthepie_eth/status/2001662354111578482",
     },
     {
-        "name": "Lisk",
-        "listing_date": "2025-05-16",
-        "twitter_post": "https://x.com/growthepie_eth/status/1923395703772000484",
-    },
-    {
         "name": "Unichain",
         "listing_date": "2025-04-23",
         "twitter_post": "https://x.com/growthepie_eth/status/1915159332607377855",
