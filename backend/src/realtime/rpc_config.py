@@ -126,14 +126,6 @@ rpc_config = {
         "calc_fees": False, ##custom gas?
     },
     
-    "gravity": {
-        "name": "Gravity",
-        "processors": "evm",
-        "stack": "nitro",
-        "sleeper": 3,
-        "calc_fees": False,
-    },
-    
     "robinhood": {
         "name": "Robinhood",
         "processors": "evm",

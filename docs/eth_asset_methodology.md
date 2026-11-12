@@ -164,7 +164,7 @@ Each value comes with a `timestamp` (unix ms) and a `per_second_increase`. The f
 - Values as of 2026-10-15: 18.4M ETH ($43.6B) in total, 64% liquid staking, 34% lending, 1% DEX.
 - Stored in `eim_fact`: `collateral_lending_eth`, `collateral_liquid_staking_eth`, `collateral_dex_eth`.
 
-**ETH paid as gas**: daily sum of `fees_paid_eth` (and `fees_paid_usd`) from `fact_kpis` over all chains in `main_config` with `metadata_gas_token = 'ETH'`, `api_in_main` and deployment flag `PROD` (Ethereum + 17 L2s). `fees_paid_eth` exists for every chain, but for chains with another gas token it is only a currency conversion. Those chains are therefore excluded: Polygon PoS (POL), Mantle (MNT), Metis, Ronin, Gravity, Plume, Fraxtal, Celo (multiple gas tokens), and Starknet (ETH or STRK, which our data can't separate). The last 365 complete days are included. `chains` lists the chains with fees in the last 7 days.
+**ETH paid as gas**: daily sum of `fees_paid_eth` (and `fees_paid_usd`) from `fact_kpis` over all chains in `main_config` with `metadata_gas_token = 'ETH'`, `api_in_main` and deployment flag `PROD` (Ethereum + 17 L2s). `fees_paid_eth` exists for every chain, but for chains with another gas token it is only a currency conversion. Those chains are therefore excluded: Polygon PoS (POL), Mantle (MNT), Metis, Ronin, Plume, Fraxtal, Celo (multiple gas tokens), and Starknet (ETH or STRK, which our data can't separate). The last 365 complete days are included. `chains` lists the chains with fees in the last 7 days.
 
 ---
 

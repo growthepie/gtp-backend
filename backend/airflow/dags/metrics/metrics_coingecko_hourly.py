@@ -31,7 +31,7 @@ def etl():
             'load_type' : 'project',
             'granularity' : 'hourly', # 'daily' or 'hourly
             'metric_keys' : ['price', 'volume', 'market_cap'],
-            'origin_keys' : ['ethereum', 'starknet', 'mantle', 'celestia', 'gravity'], # list of tokens that is required on hourly granularity
+            'origin_keys' : ['ethereum', 'starknet', 'mantle', 'celestia'], # list of tokens that is required on hourly granularity
             'days' : '3', # auto, max, or a number (as string)
             'vs_currencies' : ['usd', 'eth']
         }

@@ -1395,11 +1395,6 @@ CHAIN_LISTING_EVENTS = [
         "twitter_post": "https://x.com/growthepie_eth/status/1903087375430938708",
     },
     {
-        "name": "Gravity Alpha Mainnet",
-        "listing_date": "2024-10-25",
-        "twitter_post": "https://x.com/growthepie_eth/status/1849813680499675417",
-    },
-    {
         "name": "Plume Network",
         "listing_date": "2025-07-24",
         "twitter_post": "https://x.com/growthepie_eth/status/1948352980584923503",
