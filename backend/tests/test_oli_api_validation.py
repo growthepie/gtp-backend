@@ -185,3 +185,24 @@ class RejectedPayloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BulkProcessPoolTests(unittest.TestCase):
+    """Rejections must not break the ProcessPoolExecutor (HTTPException is not unpicklable)."""
+
+    def test_worker_returns_picklable_results(self):
+        import pickle
+        bad = build_payload(); bad["sig"]["uid"] = "0x" + "ab" * 32
+        for raw, ok in [(build_payload(), True), (bad, False), ({"not": "a payload"}, False)]:
+            result = api.verify_and_build_sync(raw)
+            self.assertEqual(result[0], ok)
+            pickle.loads(pickle.dumps(result))
+
+    def test_pool_survives_repeated_rejections(self):
+        from concurrent.futures import ProcessPoolExecutor
+        bad = build_payload(); bad["sig"]["uid"] = "0x" + "ab" * 32
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            for _ in range(3):
+                results = list(pool.map(api.verify_and_build_sync, [bad, build_payload(), {"x": 1}]))
+                self.assertEqual([r[0] for r in results], [False, True, False])
+                self.assertIn("uid does not match", results[0][1])
