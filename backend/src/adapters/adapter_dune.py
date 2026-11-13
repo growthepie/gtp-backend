@@ -114,6 +114,32 @@ class AdapterDune(AbstractAdapter):
         
     ## ----------------- Helper functions --------------------
 
+    def get_hourly_start_time(self, table:str, time_col:str, origin_key:str, extra_where:str=None, overlap_hours:int=0, max_lookback_hours:int=48) -> str:
+        """
+        Watermark for incremental hourly Dune queries (the *_v2 queries with a 'start_time' param).
+        Returns the hour after the latest hour already loaded into `table` for `origin_key` (ISO8601 UTC, e.g. '2026-11-13T07:00:00Z').
+        The v2 queries only return hours Dune has fully ingested, so every loaded hour is complete and is downloaded exactly once
+        (Dune bills exported MB). If Dune lags, the query returns nothing and the next run catches up from the same watermark.
+
+        - overlap_hours: re-pull this many already loaded hours (manual reloads / cutover from the old 3h-window queries)
+        - max_lookback_hours: never go further back than this (empty table or long outage -> backfill the gap manually)
+        """
+        now_hour = pd.Timestamp.now(tz='UTC').floor('h')
+        floor = now_hour - pd.Timedelta(hours=max_lookback_hours)
+        where = f"origin_key = '{origin_key}' AND \"{time_col}\" >= '{floor.strftime('%Y-%m-%d %H:%M:%S')}'"
+        if extra_where:
+            where += f" AND {extra_where}"
+        last = self.db_connector.execute_query(f'SELECT max("{time_col}") AS last FROM {table} WHERE {where}', load_df=True)['last'].iloc[0]
+
+        if last is None or pd.isna(last):
+            start = floor
+            print(f"No rows in {table} for {origin_key} within the last {max_lookback_hours}h, starting at {start}. Older gaps need a manual backfill.")
+        else:
+            last = pd.Timestamp(last)
+            last = last.tz_localize('UTC') if last.tzinfo is None else last.tz_convert('UTC')
+            start = max(last.floor('h') + pd.Timedelta(hours=1) - pd.Timedelta(hours=overlap_hours), floor)
+        return start.strftime('%Y-%m-%dT%H:%M:%SZ')
+
     def refresh_into_dataframe_paginated(self, query:QueryBase, ping_frequency:int=5):
         """
         Executes a Dune query, waits for completion and downloads the CSV result page by page.
