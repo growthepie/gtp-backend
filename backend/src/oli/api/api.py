@@ -13,6 +13,7 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_abi import decode as abi_decode
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 try:
     from oli_private_attesters import require_private_attesters
     from oli_access import ReadAccess, ReadLimits
@@ -27,7 +28,7 @@ except ModuleNotFoundError:
 #     api_key=os.getenv("OLI_API_KEY")
 # )
 
-# tune max_workers to match available CPUs in Cloud Run
+# verification workers for /attestations/bulk (replaced by _replace_process_pool if it ever breaks)
 process_pool = ProcessPoolExecutor(max_workers=4)
 
 
@@ -1110,17 +1111,31 @@ async def post_single_attestation(payload: AttestationPayload):
     )
 
 
-def verify_and_build_sync(att_dict: dict) -> dict:
-    # Recreate the object from plain data
-    payload = AttestationPayload.model_validate(att_dict)
+def verify_and_build_sync(att_dict: dict) -> Tuple[bool, Any]:
+    """
+    Runs in a process-pool worker. Never lets an exception escape: FastAPI's HTTPException and
+    pydantic's ValidationError cannot be unpickled in the parent, and a failed unpickle marks the
+    whole ProcessPoolExecutor as broken (all later bulk requests then hang).
+    Returns (True, row) or (False, reason) - plain, always-picklable values.
+    """
+    try:
+        payload = AttestationPayload.model_validate(att_dict)
+        verify_attestation(payload, LABEL_POOL_SCHEMAS)
+        return True, build_row_from_payload(payload)
+    except HTTPException as e:
+        return False, str(e.detail)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"[:500]
 
-    # This will raise HTTPException(400) on bad sig
-    verify_attestation(payload, LABEL_POOL_SCHEMAS)
 
-    # Build the row (no async inside here, just pure compute)
-    row = build_row_from_payload(payload)
+def _replace_process_pool() -> None:
+    """Swap in a fresh pool if the current one broke (e.g. a worker was OOM-killed)."""
+    global process_pool
+    old = process_pool
+    process_pool = ProcessPoolExecutor(max_workers=4)
+    old.shutdown(wait=False, cancel_futures=True)
+    logger.error("Process pool was broken and has been replaced")
 
-    return row
 
 @app.post("/attestations/bulk", response_model=BulkAttestationResponse, tags=["Attestation: Labels"])
 async def post_bulk_attestations(req: BulkAttestationRequest):
@@ -1128,6 +1143,9 @@ async def post_bulk_attestations(req: BulkAttestationRequest):
 
     # 1. schedule verify+build for each attestation in parallel across processes
     t_verify_start = time.perf_counter()
+
+    if getattr(process_pool, "_broken", False):
+        _replace_process_pool()
 
     loop = asyncio.get_running_loop()
     tasks = []
@@ -1139,24 +1157,23 @@ async def post_bulk_attestations(req: BulkAttestationRequest):
 
     t_verify_end = time.perf_counter()
 
+    # infrastructure failure (not the client's fault): reset the pool, let the client retry
+    if any(isinstance(r, BrokenProcessPool) for r in results):
+        _replace_process_pool()
+        raise HTTPException(status_code=503, detail="Verification workers restarted; please retry the request")
+
     valid_rows = []
     failed_validation: List[Dict[str, Any]] = []
 
     for idx, result in enumerate(results):
         if isinstance(result, Exception):
-            # If verify_attestation raised HTTPException, keep its reason
-            if isinstance(result, HTTPException):
-                failed_validation.append({
-                    "index": idx,
-                    "reason": result.detail,
-                })
-            else:
-                failed_validation.append({
-                    "index": idx,
-                    "reason": str(result),
-                })
+            failed_validation.append({"index": idx, "reason": f"{type(result).__name__}: {result}"[:500]})
+            continue
+        ok, value = result
+        if ok:
+            valid_rows.append(value)
         else:
-            valid_rows.append(result)
+            failed_validation.append({"index": idx, "reason": value})
 
     # 2. insert
     t_insert_start = time.perf_counter()
