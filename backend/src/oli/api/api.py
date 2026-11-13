@@ -1,14 +1,14 @@
-import sys, os, json, hashlib, asyncpg, time, asyncio, base64, secrets, logging
+import sys, os, re, json, hashlib, asyncpg, time, asyncio, base64, secrets, logging
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, status, Request, Header
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, ValidationError
 from typing import List, Optional, Any, Dict, Tuple, Literal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from eth_utils import to_normalized_address
+from eth_utils import to_normalized_address, keccak
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_abi import decode as abi_decode
@@ -581,9 +581,135 @@ def recover_signer_address(payload: AttestationPayload) -> str:
     return to_normalized_address(recovered)
 
 
-def verify_attestation(payload: AttestationPayload) -> None:
+# ---- ENVELOPE VALIDATION ----
+# Only EAS offchain attestations signed for the Base mainnet EAS contract are accepted
+# (every legitimate API submission so far: domain 'EAS Attestation' v1.2.0, chainId 8453).
+EAS_DOMAIN_NAME = "EAS Attestation"
+EAS_DOMAIN_VERSIONS = {"1.0.1", "1.2.0"}  # EAS contract versions deployed on Base
+EAS_CONTRACTS = {8453: "0x4200000000000000000000000000000000000021"}  # chainId -> EAS (Base predeploy)
+EAS_OFFCHAIN_VERSION = 2  # v2 = with salt; the payload model requires salt anyway
+MAX_FUTURE_SKEW = timedelta(minutes=5)  # tolerated client clock drift for message.time
+
+LABEL_POOL_SCHEMAS = {
+    "0xcff83309b59685fdae9dad7c63d969150676d51d8eeda66799d1c4898b84556a",  # OLI label pool v2 (CAIP-10 subject)
+    "0xb763e62d940bed6f527dd82418e146a904e62a297b8fa765c9b3e1f0bc6fdd68",  # OLI label pool v1 (chain_id subject)
+}
+
+EAS_ATTEST_TYPES = [
+    ("version", "uint16"),
+    ("schema", "bytes32"),
+    ("recipient", "address"),
+    ("time", "uint64"),
+    ("expirationTime", "uint64"),
+    ("revocable", "bool"),
+    ("refUID", "bytes32"),
+    ("data", "bytes"),
+    ("salt", "bytes32"),
+]
+
+ZERO_ADDRESS_BYTES = b"\x00" * 20
+
+
+def _hex_field(value: str, name: str, length: Optional[int] = None) -> bytes:
+    try:
+        b = hex_to_bytes(value) or b""
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid hex in {name}")
+    if length is not None and len(b) != length:
+        raise HTTPException(status_code=400, detail=f"{name} must be {length} bytes")
+    return b
+
+
+def compute_offchain_uid(msg: AttestationMessage) -> bytes:
+    """
+    EAS offchain attestation UID, version 2 (same as the EAS SDK's getOffchainUID and
+    oli-python's calculate_attestation_uid_v2): keccak256 of the packed message with the
+    schema as UTF-8 string bytes, attester = zero address and bump = 0.
+    """
+    packed = (
+        int(msg.version).to_bytes(2, "big")
+        + msg.schema_id.encode("utf-8")
+        + _hex_field(msg.recipient, "message.recipient", 20)
+        + ZERO_ADDRESS_BYTES
+        + int(msg.time).to_bytes(8, "big")
+        + int(msg.expirationTime).to_bytes(8, "big")
+        + (b"\x01" if msg.revocable else b"\x00")
+        + _hex_field(msg.refUID, "message.refUID", 32)
+        + _hex_field(msg.data, "message.data")
+        + _hex_field(msg.salt, "message.salt", 32)
+        + (0).to_bytes(4, "big")
+    )
+    return keccak(packed)
+
+
+def verify_envelope(payload: AttestationPayload, allowed_schemas: set) -> None:
+    """Reject anything that is not a canonical EAS offchain attestation for one of the allowed schemas."""
+    sig = payload.sig
+    msg = sig.message
+    domain = sig.domain
+
+    # domain: the EAS contract on an allowed chain
+    if domain.name != EAS_DOMAIN_NAME or domain.version not in EAS_DOMAIN_VERSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported EIP-712 domain (expected EAS Attestation)")
+    try:
+        domain_chain = int(domain.chainId)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid domain.chainId")
+    expected_contract = EAS_CONTRACTS.get(domain_chain)
+    if expected_contract is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported domain.chainId {domain.chainId}")
+    if domain.verifyingContract.lower() != expected_contract:
+        raise HTTPException(status_code=400, detail="domain.verifyingContract is not the EAS contract")
+
+    # schema + typed-data shape
+    if msg.schema_id.lower() not in allowed_schemas:
+        raise HTTPException(status_code=400, detail="Unsupported schema for this endpoint")
+    if [(f.name, f.type) for f in sig.types.Attest] != EAS_ATTEST_TYPES:
+        raise HTTPException(status_code=400, detail="Non-standard Attest types")
+    if msg.version != EAS_OFFCHAIN_VERSION or sig.version != EAS_OFFCHAIN_VERSION:
+        raise HTTPException(status_code=400, detail="Only EAS offchain attestation version 2 is supported")
+
+    # time: no future-dated attestations (they would rank as the newest label forever)
+    attestation_time = unix_str_to_datetime(msg.time)
+    if attestation_time > datetime.now(timezone.utc) + MAX_FUTURE_SKEW:
+        raise HTTPException(status_code=400, detail="message.time is in the future")
+
+    # uid must be derived from the signed message, never chosen by the client
+    try:
+        expected_uid = compute_offchain_uid(msg)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Attestation message could not be hashed")
+    if _hex_field(sig.uid, "sig.uid", 32) != expected_uid:
+        raise HTTPException(status_code=400, detail="uid does not match the attestation message")
+
+
+CAIP2_RE = re.compile(r"^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$")  # CAIP-2 namespace:reference
+CAIP10_ACCOUNT_RE = re.compile(r"^[-.%a-zA-Z0-9]{1,128}$")  # CAIP-10 account_address
+EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def validate_label_subject(chain_id: Optional[str], account: Optional[str], tags: Any, has_caip10: bool) -> None:
+    """Subject must be a well-formed CAIP-2 chain (+ CAIP-10 account) and tags a non-empty JSON object."""
+    if not chain_id or not CAIP2_RE.match(chain_id):
+        raise HTTPException(status_code=400, detail="Invalid chain_id; expected CAIP-2 (e.g. eip155:8453)")
+    namespace, reference = chain_id.split(":", 1)
+    if namespace == "eip155" and not reference.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid eip155 chain reference")
+    if has_caip10:
+        if not account or not CAIP10_ACCOUNT_RE.match(account):
+            raise HTTPException(status_code=400, detail="Invalid CAIP-10 account address")
+        if namespace == "eip155" and not EVM_ADDRESS_RE.match(account):
+            raise HTTPException(status_code=400, detail="Invalid EVM address in CAIP-10 subject")
+    if not isinstance(tags, dict) or not tags:
+        raise HTTPException(status_code=400, detail="tags_json must be a non-empty JSON object")
+
+
+def verify_attestation(payload: AttestationPayload, allowed_schemas: set) -> None:
     if payload.sig.primaryType != "Attest":
         raise HTTPException(status_code=400, detail="Expected primaryType=Attest")
+    verify_envelope(payload, allowed_schemas)
     recovered_addr = recover_signer_address(payload)
     if recovered_addr != to_normalized_address(payload.signer):
         raise HTTPException(status_code=400, detail="Signature invalid or signer mismatch")
@@ -771,6 +897,7 @@ def build_row_from_payload(att: AttestationPayload):
             status_code=400,
             detail="Invalid attestation data; expected chain_id or CAIP10",
         )
+    validate_label_subject(decoded_chain_id, decoded_recipient, decoded_tags_dict, has_caip10=decoded_recipient is not None)
     recipient_value = decoded_recipient if decoded_recipient is not None else msg.recipient
     try:
         recipient_bytes = hex_to_bytes(recipient_value)
@@ -968,7 +1095,7 @@ async def get_curated_sample():
 @app.post("/attestation", response_model=SingleAttestationResponse, tags=["Attestation: Labels"])
 async def post_single_attestation(payload: AttestationPayload):
     # Full cryptographic verification
-    verify_attestation(payload)
+    verify_attestation(payload, LABEL_POOL_SCHEMAS)
 
     row = build_row_from_payload(payload)
 
@@ -988,7 +1115,7 @@ def verify_and_build_sync(att_dict: dict) -> dict:
     payload = AttestationPayload.model_validate(att_dict)
 
     # This will raise HTTPException(400) on bad sig
-    verify_attestation(payload)
+    verify_attestation(payload, LABEL_POOL_SCHEMAS)
 
     # Build the row (no async inside here, just pure compute)
     row = build_row_from_payload(payload)
@@ -1220,7 +1347,7 @@ async def post_trust_list(payload: AttestationPayload):
     signed by the trust-list issuer.
     """
     # 1) Verify EIP-712 signature (already battle-tested for /attestation)
-    verify_attestation(payload)
+    verify_attestation(payload, {TRUST_LIST_SCHEMA})
 
     # 2) Build DB row from the EAS message for the TL schema
     row = build_trust_list_row_from_eas(payload)
