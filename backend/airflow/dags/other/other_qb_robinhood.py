@@ -60,7 +60,7 @@ def run_dag():
                 'queries': [
                     {
                         'name': 'Robinhood_stock_list',
-                        'query_id': 5429585,
+                        'query_id': 9121926, # v2 of 5429585 (days window applied inside the scans), SQL in src/queries/dune/
                         'params': {'days': 3}
                     }
                 ],
@@ -70,12 +70,13 @@ def run_dag():
         df = ad.extract(load_params2)
         ad.load(df)
 
-        # load new daily values for all tokenized assets (requires tokenized asset dune table to be up to date)
+        # load new daily values for all tokenized assets (requires robinhood_stock_list to be up to date, see above)
+        # v2 of 5435746 reads all TransferShares logs (cheap, partition filtered); other contracts emit that event too, so keep only our stock list
         load_params = {
             'queries': [
                 {
                     'name': 'Robinhood_stock_daily',
-                    'query_id': 5435746,
+                    'query_id': 9121927, # SQL in src/queries/dune/
                     'params': {'days': 3}
                 }
             ],
@@ -83,6 +84,10 @@ def run_dag():
             'load_type': 'robinhood_daily'
         }
         df = ad.extract(load_params)
+        if not df.empty:
+            stocks = set(db_connector.execute_query("SELECT lower(contract_address) AS contract_address FROM robinhood_stock_list", load_df=True)['contract_address'])
+            df = df[df.index.get_level_values('contract_address').str.lower().isin(stocks)]
+            print(f"Kept {df.shape[0]} rows for contracts in robinhood_stock_list.")
         ad.load(df)
 
     @task()

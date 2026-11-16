@@ -42,7 +42,7 @@ def etl():
                 },
                 {
                     'name': 'shopify_base_commerce',
-                    'query_id': 5302614,
+                    'query_id': 9121925, # v2 of 5302614 (cumulative running totals instead of a full-history self-join), SQL in src/queries/dune/
                     'params': {'days': 3}
                 },
                 {
