@@ -15,10 +15,15 @@ from src.misc.airflow_utils import alert_via_webhook, claude_fix_on_failure
     description='Load aggregates metrics such as txcount, daa, fees paid, stablecoin mcap where applicable.',
     tags=['metrics', 'daily'],
     start_date=datetime(2023,6,5),
-    schedule='10 01 * * *' ## needs to run before sql_materialize and before metrics_sql_blockspace
+    schedule='10 01 * * *', ## needs to run before sql_materialize and before metrics_sql_blockspace
+    params={'overlap_days': 0}, ## v2 queries load complete days from the last loaded day + 1; trigger with {"overlap_days": N} to reload the last N days
 )
 
 def etl():
+    def get_overlap_days() -> int:
+        from airflow.sdk import get_current_context
+        return int(get_current_context()['params'].get('overlap_days') or 0)
+
     @task()
     def run_fact_kpis():
         import os
@@ -149,8 +154,8 @@ def etl():
             'queries': [
                 {
                     'name': 'megaeth_contract_level_daily',
-                    'query_id': 6360383,
-                    'params': {'days': 2}
+                    'query_id': 9134315, # v2 of 6360383 (incremental, complete days only), SQL in src/queries/dune/daily/
+                    'params': {} # start_date set below
                 }
             ],
             'prepare_df': 'prepare_df_contract_level_daily',
@@ -160,8 +165,13 @@ def etl():
         # initialize adapter
         db_connector = DbConnector()
         ad = AdapterDune(adapter_params, db_connector)
+        start_date = ad.get_daily_start_date('blockspace_fact_contract_level', 'megaeth', overlap_days=get_overlap_days())
+        load_params['queries'][0]['params'] = {'start_date': start_date}
         # extract
         df = ad.extract(load_params)
+        if df.empty:
+            print(f"No new complete days since {start_date}.")
+            return
 
         print(f"Loaded {df.shape[0]} rows for contract level.")
         
@@ -225,8 +235,8 @@ def etl():
             'queries': [
                 {
                     'name': 'polygon_pos_contract_level_daily',
-                    'query_id': 6474479,
-                    'params': {'days': 2}
+                    'query_id': 9134313, # v2 of 6474479 (incremental, complete days only), SQL in src/queries/dune/daily/
+                    'params': {} # start_date set below
                 }
             ],
             'prepare_df': 'prepare_df_contract_level_daily',
@@ -236,8 +246,13 @@ def etl():
         # initialize adapter
         db_connector = DbConnector()
         ad = AdapterDune(adapter_params, db_connector)
+        start_date = ad.get_daily_start_date('blockspace_fact_contract_level', 'polygon_pos', overlap_days=get_overlap_days())
+        load_params['queries'][0]['params'] = {'start_date': start_date}
         # extract
         df = ad.extract(load_params)
+        if df.empty:
+            print(f"No new complete days since {start_date}.")
+            return
 
         print(f"Loaded {df.shape[0]} rows for contract level.")
         
@@ -346,8 +361,8 @@ def etl():
             'queries': [
                 {
                     'name': 'robinhood_contract_level_daily',
-                    'query_id': 7922138,
-                    'params': {'days': 2}
+                    'query_id': 9134312, # v2 of 7922138 (incremental, complete days only), SQL in src/queries/dune/daily/
+                    'params': {} # start_date set below
                 }
             ],
             'prepare_df': 'prepare_df_contract_level_daily',
@@ -357,8 +372,13 @@ def etl():
         # initialize adapter
         db_connector = DbConnector()
         ad = AdapterDune(adapter_params, db_connector)
+        start_date = ad.get_daily_start_date('blockspace_fact_contract_level', 'robinhood', overlap_days=get_overlap_days())
+        load_params['queries'][0]['params'] = {'start_date': start_date}
         # extract
         df = ad.extract(load_params)
+        if df.empty:
+            print(f"No new complete days since {start_date}.")
+            return
 
         print(f"Loaded {df.shape[0]} rows for contract level.")
 
@@ -459,8 +479,8 @@ def etl():
             'queries': [
                 {
                     'name': 'starknet_contract_level_daily',
-                    'query_id': 6587405,
-                    'params': {'days': 2}
+                    'query_id': 9134314, # v2 of 6587405 (incremental, complete days only), SQL in src/queries/dune/daily/
+                    'params': {} # start_date set below
                 }
             ],
             'prepare_df': 'prepare_df_contract_level_daily',
@@ -470,8 +490,13 @@ def etl():
         # initialize adapter
         db_connector = DbConnector()
         ad = AdapterDune(adapter_params, db_connector)
+        start_date = ad.get_daily_start_date('blockspace_fact_contract_level', 'starknet', overlap_days=get_overlap_days())
+        load_params['queries'][0]['params'] = {'start_date': start_date}
         # extract
         df = ad.extract(load_params)
+        if df.empty:
+            print(f"No new complete days since {start_date}.")
+            return
 
         print(f"Loaded {df.shape[0]} rows for contract level.")
         
@@ -549,8 +574,8 @@ def etl():
             'queries': [
                 {
                     'name': 'ronin_aa',
-                    'query_id': 6776362,
-                    'params': {'days': 2}
+                    'query_id': 9134316, # v2 of 6776362 (incremental, complete days only), SQL in src/queries/dune/daily/
+                    'params': {} # start_date set below
                 }
             ],
             'prepare_df': 'prepare_df_contract_level_aa_daily',
@@ -560,8 +585,13 @@ def etl():
         # initialize adapter
         db_connector = DbConnector()
         ad = AdapterDune(adapter_params, db_connector)
+        start_date = ad.get_daily_start_date('fact_active_addresses_contract', 'ronin', overlap_days=get_overlap_days())
+        load_params['queries'][0]['params'] = {'start_date': start_date}
         # extract
         df = ad.extract(load_params)
+        if df.empty:
+            print(f"No new complete days since {start_date}.")
+            return
 
         print(f"Loaded {df.shape[0]} rows for ronin active addresses on contract level.")
 
@@ -657,26 +687,31 @@ def etl():
     #run_inscriptions() # paused as of Jan 2025, no one uses inscriptions. Backfilling easily possible if needed.
     check_for_depreciated_L2_trx()
     
+    ## Daily sender lists (fact_active_addresses_contract, fact_active_addresses) for MegaETH, Robinhood, Starknet and the native transfer
+    ## senders are now filled by metrics_dune_hourly from the hourly AA queries (AdapterDune.load_daily_aa_from_hourly, same definition),
+    ## which saves exporting the same addresses twice. The daily tasks are kept for manual reloads/backfills.
+    ## Ronin has no hourly AA query and keeps its daily task.
+
     ## MegaETH tasks
-    run_mega_aa()
+    #run_mega_aa() # replaced by metrics_dune_hourly (see above)
     run_mega_contract_level()
     run_mega_category_level()
-    
+
     ## Polygon POS tasks
     run_polygon_contract_level()
     run_polygon_category_level()
 
     ## Robinhood tasks
-    run_robinhood_aa()
+    #run_robinhood_aa() # replaced by metrics_dune_hourly (see above)
     run_robinhood_contract_level()
     run_robinhood_category_level()
 
     ## ETH app (native transfer senders on MegaETH & Robinhood)
-    run_native_transfer_aa()
+    #run_native_transfer_aa() # replaced by metrics_dune_hourly (see above)
 
     ## Starknet tasks
     run_starknet_contract_level()
-    run_starknet_aa()
+    #run_starknet_aa() # replaced by metrics_dune_hourly (see above)
     
     ## Ronin tasks
     run_ronin_aa()

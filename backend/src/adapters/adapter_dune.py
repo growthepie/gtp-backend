@@ -140,6 +140,53 @@ class AdapterDune(AbstractAdapter):
             start = max(last.floor('h') + pd.Timedelta(hours=1) - pd.Timedelta(hours=overlap_hours), floor)
         return start.strftime('%Y-%m-%dT%H:%M:%SZ')
 
+    def get_daily_start_date(self, table:str, origin_key:str, date_col:str='date', extra_where:str=None, overlap_days:int=0, max_lookback_days:int=7) -> str:
+        """
+        Watermark for incremental daily Dune queries (the *_v2 queries with a 'start_date' param), daily counterpart of get_hourly_start_time.
+        Returns the day after the latest date already loaded into `table` for `origin_key` ('YYYY-MM-DD'). The v2 queries only return days
+        Dune has fully ingested, so each day is exported exactly once; if Dune lags, the next run catches up.
+        """
+        today = pd.Timestamp.now(tz='UTC').normalize().tz_localize(None)
+        floor = today - pd.Timedelta(days=max_lookback_days)
+        where = f"origin_key = '{origin_key}' AND \"{date_col}\" >= '{floor.strftime('%Y-%m-%d')}'"
+        if extra_where:
+            where += f" AND {extra_where}"
+        last = self.db_connector.execute_query(f'SELECT max("{date_col}") AS last FROM {table} WHERE {where}', load_df=True)['last'].iloc[0]
+        if last is None or pd.isna(last):
+            start = floor
+            print(f"No rows in {table} for {origin_key} within the last {max_lookback_days} days, starting at {start.date()}. Older gaps need a manual backfill.")
+        else:
+            start = max(pd.Timestamp(last).tz_localize(None).normalize() + pd.Timedelta(days=1 - overlap_days), floor)
+        return start.strftime('%Y-%m-%d')
+
+    def load_daily_aa_from_hourly(self, df:pd.DataFrame, origin_key:str, chain_level:bool=True):
+        """
+        Upserts the senders of a prepared hourly AA df (columns hour, address, from_address; address '<nil>' = contract creation)
+        into the daily tables, replacing the daily *_aa Dune queries (same definition, so the union of a day's 24 hours equals the daily result).
+        Days fill up during the day; downstream aggregations only read days before today and recompute a rolling window.
+
+        - fact_active_addresses_contract: distinct (address, date, from_address), contract creations excluded (as in the daily tasks)
+        - fact_active_addresses (chain_level=True): distinct senders per date, contract creations included
+        """
+        if df.empty:
+            return
+        df = df[['hour', 'address', 'from_address']].copy()
+        df = df[df.from_address != '<nil>'] # Starknet calls without caller/sender (the daily queries filter from_address IS NOT NULL)
+        df['date'] = df['hour'].astype(str).str[:10]
+
+        df_contract = df[df.address != '<nil>'][['address', 'date', 'from_address']].drop_duplicates()
+        df_contract['origin_key'] = origin_key
+        df_contract = df_contract.set_index(['address', 'date', 'origin_key', 'from_address'])
+        self.db_connector.upsert_table('fact_active_addresses_contract', df_contract)
+        print(f"Upserted {df_contract.shape[0]} daily contract level sender rows for {origin_key}.")
+
+        if chain_level:
+            df_aa = df[['from_address', 'date']].drop_duplicates().rename(columns={'from_address': 'address'})
+            df_aa['origin_key'] = origin_key
+            df_aa = df_aa.set_index(['address', 'date', 'origin_key'])
+            self.db_connector.upsert_table('fact_active_addresses', df_aa)
+            print(f"Upserted {df_aa.shape[0]} daily sender rows for {origin_key}.")
+
     def refresh_into_dataframe_paginated(self, query:QueryBase, ping_frequency:int=5):
         """
         Executes a Dune query, waits for completion and downloads the CSV result page by page.

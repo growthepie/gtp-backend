@@ -6,6 +6,8 @@ from src.misc.airflow_utils import alert_via_webhook
 ## start_time = latest hour already in our target table + 1h (AdapterDune.get_hourly_start_time), and the queries only return
 ## hours Dune has fully ingested -> each hour is exported exactly once (Dune bills exported MB). If Dune lags, a run returns
 ## nothing and the next run catches up. Trigger with {"overlap_hours": N} to reload the last N loaded hours.
+## The AA tasks also fill the daily sender tables (fact_active_addresses_contract, fact_active_addresses) via AdapterDune.load_daily_aa_from_hourly,
+## replacing the daily *_aa Dune queries in metrics_dune (except Ronin, which has no hourly AA query).
 
 NATIVE_ADDRESS = "decode('000000000000000000000000000000000000eeee', 'hex')" ## placeholder address of the 'eth' app (native transfers)
 
@@ -141,11 +143,14 @@ def etl():
 
         # prepare for fact_active_addresses_contract
         df_contract_aa = df.copy()
-        df_contract_aa = df_contract_aa[df_contract_aa.address != '<nil>']
+        df_contract_aa = df_contract_aa[(df_contract_aa.address != '<nil>') & (df_contract_aa.from_address != '<nil>')] # calls without caller/sender come back as '<nil>'
 
         df_contract_aa['origin_key'] = 'starknet'
         df_contract_aa.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
         db_connector.upsert_table('fact_active_addresses_contract_hourly', df_contract_aa)
+
+        # daily table (replaces the daily starknet_aa Dune query); Starknet isn't stored in fact_active_addresses
+        ad.load_daily_aa_from_hourly(df, 'starknet', chain_level=False)
 
     @task()
     def run_megaeth_contract_level_hourly():
@@ -225,6 +230,9 @@ def etl():
         df_contract_aa['origin_key'] = 'megaeth'
         df_contract_aa.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
         db_connector.upsert_table('fact_active_addresses_contract_hourly', df_contract_aa)
+
+        # daily tables (replaces the daily megaeth_aa Dune query)
+        ad.load_daily_aa_from_hourly(df, 'megaeth')
 
     @task()
     def run_polygon_pos_contract_level_hourly():
@@ -384,6 +392,9 @@ def etl():
         df_contract_aa.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
         db_connector.upsert_table('fact_active_addresses_contract_hourly', df_contract_aa)
 
+        # daily tables (replaces the daily robinhood_aa Dune query)
+        ad.load_daily_aa_from_hourly(df, 'robinhood')
+
     @task()
     def run_native_transfer_hourly():
         ## hourly native transfers for the 'eth' app, mapped to placeholder address 0x000000000000000000000000000000000000EeEe
@@ -453,6 +464,9 @@ def etl():
                 print(f"No new complete hours for {origin_key} since {start_time}.")
                 continue
             print(f"Loaded {df.shape[0]} rows for {origin_key} hourly native transfer senders.")
+
+            # daily contract level table (replaces the daily *_native_transfer_aa Dune queries); senders are already in fact_active_addresses via the AA tasks
+            ad.load_daily_aa_from_hourly(df, origin_key, chain_level=False)
 
             df['origin_key'] = origin_key
             df.set_index(['address', 'hour', 'origin_key', 'from_address'], inplace=True)
