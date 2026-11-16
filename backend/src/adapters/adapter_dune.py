@@ -198,9 +198,45 @@ class AdapterDune(AbstractAdapter):
         while status.state not in ExecutionState.terminal_states():
             time.sleep(ping_frequency)
             status = self.client.get_status(job_id)
+        self.log_execution_cost(job_id, query) # failed executions cost credits too
         if status.state != ExecutionState.COMPLETED:
             raise Exception(f"Dune execution {job_id} for query {query.query_id} ended in state {status.state.value}")
         return self.get_result_dataframe_paginated(job_id, status.result_metadata)
+
+    def log_execution_cost(self, job_id:str, query:QueryBase):
+        """
+        Logs the credit cost of a finished execution: compute credits ('execution_cost_credits', not parsed by dune_client)
+        and the result size (exports are billed per MB). Printed and appended to public.dune_execution_log. Never raises.
+        """
+        try:
+            import os, json
+            s = requests.get(self.client._route_url(f"/execution/{job_id}/status"), headers=self.client.default_headers(), timeout=60).json()
+            m = s.get('result_metadata') or {}
+            params = {p.key: p.value for p in (getattr(query, 'params', None) or [])}
+            row = {
+                'execution_id': job_id,
+                'query_id': int(query.query_id),
+                'query_name': query.name,
+                'params': json.dumps(params) if params else None,
+                'performance': self.query_speed,
+                'state': s.get('state'),
+                'submitted_at': s.get('submitted_at'),
+                'execution_started_at': s.get('execution_started_at'),
+                'execution_ended_at': s.get('execution_ended_at'),
+                'pending_ms': m.get('pending_time_millis'),
+                'execution_ms': m.get('execution_time_millis'),
+                'compute_credits': s.get('execution_cost_credits'),
+                'result_rows': m.get('total_row_count'),
+                'result_bytes': m.get('total_result_set_bytes'),
+                'datapoints': m.get('datapoint_count'),
+                'dag_id': os.getenv('AIRFLOW_CTX_DAG_ID'),
+                'task_id': os.getenv('AIRFLOW_CTX_TASK_ID'),
+            }
+            print(f"Dune cost | {query.name} ({query.query_id}) execution {job_id}: compute {row['compute_credits']} credits, "
+                  f"result {round((row['result_bytes'] or 0) / 1e6, 3)} MB / {row['result_rows']} rows, execution {row['execution_ms']} ms, state {row['state']}")
+            self.db_connector.insert_dune_execution_log(row)
+        except Exception as e:
+            print(f"Could not log Dune execution cost for {job_id}: {e}")
 
     def get_result_dataframe_paginated(self, job_id:str, result_metadata=None, page_size:int=10000, max_retries:int=5):
         """

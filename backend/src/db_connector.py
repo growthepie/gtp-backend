@@ -3114,3 +3114,24 @@ class DbConnector:
                 df = df.melt(id_vars=['date'], var_name='metric_key', value_name='value')
                 df['origin_key'] = 'ethereum'
                 return df.set_index(['metric_key', 'origin_key', 'date'])
+
+        def insert_dune_execution_log(self, row: dict) -> int:
+                """
+                Append-only insert of one Dune execution (credit cost tracking, written by AdapterDune.log_execution_cost).
+                Table: public.dune_execution_log (execution_id PK, query_id, query_name, params, performance, state, submitted_at,
+                execution_started_at, execution_ended_at, pending_ms, execution_ms, compute_credits, result_rows, result_bytes,
+                datapoints, dag_id, task_id, logged_at). Billed credits = compute_credits + result MB * plan export rate.
+                """
+                insert_sql = text("""
+                    INSERT INTO public.dune_execution_log (
+                        execution_id, query_id, query_name, params, performance, state, submitted_at, execution_started_at,
+                        execution_ended_at, pending_ms, execution_ms, compute_credits, result_rows, result_bytes, datapoints, dag_id, task_id
+                    ) VALUES (
+                        :execution_id, :query_id, :query_name, :params, :performance, :state, :submitted_at, :execution_started_at,
+                        :execution_ended_at, :pending_ms, :execution_ms, :compute_credits, :result_rows, :result_bytes, :datapoints, :dag_id, :task_id
+                    )
+                    ON CONFLICT (execution_id) DO NOTHING
+                """)
+                with self.engine.begin() as conn:
+                        result = conn.execute(insert_sql, row)
+                return result.rowcount
