@@ -31,8 +31,9 @@ def main():
 
         adapter_params = {'rpc_url': 'https://base.gateway.tenderly.co'}
         db_connector = DbConnector(db_name='oli')
-        ad_onchain = AdapterOLIOnchain(adapter_params, db_connector)
-        ad_offchain = AdapterOLIOffchain(adapter_params, db_connector)
+        # adapters call eth_chainId on init, so they are created inside the try below to get the same 429 backoff
+        ad_onchain = None
+        ad_offchain = None
 
         ## tracking time
         import time
@@ -43,6 +44,11 @@ def main():
         while True:
 
             try:
+                if ad_onchain is None:
+                    ad_onchain = AdapterOLIOnchain(adapter_params, db_connector)
+                if ad_offchain is None:
+                    ad_offchain = AdapterOLIOffchain(adapter_params, db_connector)
+
                 ## Onchain, attestations of labels & revocations of labels ##
                 extract_params_onchain = {
                     'from_block': 'last_run_block',  # add last run block
