@@ -1,6 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from airflow.sdk import dag, task
 from src.misc.airflow_utils import alert_via_webhook
+
+DB_NAMES = ["fun", "oli", "web3"]
+PREFIX = "db_backups"
+RETENTION_DAYS = 10
 
 
 @dag(
@@ -18,61 +22,49 @@ from src.misc.airflow_utils import alert_via_webhook
     schedule="00 20 * * *",
 )
 def backup_db_to_hetzner():
-    @task()
-    def run_backup():
-        import boto3
-        import os
-        import re
-        import subprocess
-        import tempfile
-        from src.misc.helper_functions import upload_file_to_s3
+    def make_backup_task(db_name, trigger_rule):
+        # One task per database so a failed upload only retries that database
+        # (web3 is ~136 GB: dump ~2.5h + upload several hours).
+        @task(task_id=f"backup_{db_name}", trigger_rule=trigger_rule)
+        def run_backup():
+            import os
+            import subprocess
+            import tempfile
+            from datetime import datetime, timezone
+            from src.misc.helper_functions import upload_file_to_s3
 
-        db_user = "db_backup"
-        db_passwd = os.getenv("DB_PASSWORD_BACKUP")
-        db_host = os.getenv("DB_HOST")
-        db_port = os.getenv("DB_PORT") or "5432"
+            db_user = "db_backup"
+            db_passwd = os.getenv("DB_PASSWORD_BACKUP")
+            db_host = os.getenv("DB_HOST")
+            db_port = os.getenv("DB_PORT") or "5432"
 
-        if not all([db_user, db_passwd, db_host]):
-            raise ValueError(
-                "Missing required DB env vars: DB_PASSWORD_BACKUP, DB_HOST"
-            )
+            if not all([db_user, db_passwd, db_host]):
+                raise ValueError(
+                    "Missing required DB env vars: DB_PASSWORD_BACKUP, DB_HOST"
+                )
 
-        # Allow DB_HOST to include a port (e.g., "host:5432")
-        if db_host and ":" in db_host and not db_host.startswith("["):
-            host_part, port_part = db_host.rsplit(":", 1)
-            if port_part.isdigit():
-                db_host = host_part
-                if not os.getenv("DB_PORT"):
-                    db_port = port_part
+            # Allow DB_HOST to include a port (e.g., "host:5432")
+            if db_host and ":" in db_host and not db_host.startswith("["):
+                host_part, port_part = db_host.rsplit(":", 1)
+                if port_part.isdigit():
+                    db_host = host_part
+                    if not os.getenv("DB_PORT"):
+                        db_port = port_part
 
-        bucket_name = os.getenv("HETZNER_BUCKET_NAME")
-        prefix = "db_backups"
-        retention_days = 10
-        hetzner_access_key = os.getenv("HETZNER_ACCESS_KEY_ID")
-        hetzner_secret_key = os.getenv("HETZNER_SECRET_ACCESS_KEY")
+            bucket_name = os.getenv("HETZNER_BUCKET_NAME")
+            if not all([os.getenv("HETZNER_ACCESS_KEY_ID"), os.getenv("HETZNER_SECRET_ACCESS_KEY")]):
+                raise ValueError(
+                    "Missing required Hetzner env vars: HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY"
+                )
 
-        if not all([hetzner_access_key, hetzner_secret_key]):
-            raise ValueError(
-                "Missing required Hetzner env vars: HETZNER_ACCESS_KEY_ID, HETZNER_SECRET_ACCESS_KEY"
-            )
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db_passwd
 
-        env = os.environ.copy()
-        env["PGPASSWORD"] = db_passwd
-
-        db_names = ["fun", "oli", "web3"]
-        s3 = boto3.client(
-            "s3",
-            endpoint_url="https://fsn1.your-objectstorage.com",
-            aws_access_key_id=hetzner_access_key,
-            aws_secret_access_key=hetzner_secret_key,
-        )
-
-        for name in db_names:
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
-            filename = f"{name}_{ts}.dump"
-            blob_path = f"{prefix}/{name}/date={ts[:10]}/{filename}"
-            
-            print(f"Starting backup for database '{name}' to s3://{bucket_name}/{blob_path}...")
+            filename = f"{db_name}_{ts}.dump"
+            blob_path = f"{PREFIX}/{db_name}/date={ts[:10]}/{filename}"
+
+            print(f"Starting backup for database '{db_name}' to s3://{bucket_name}/{blob_path}...")
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 dump_path = os.path.join(tmpdir, filename)
@@ -90,7 +82,7 @@ def backup_db_to_hetzner():
                     db_user,
                     "--file",
                     dump_path,
-                    name,
+                    db_name,
                 ]
 
                 try:
@@ -112,6 +104,9 @@ def backup_db_to_hetzner():
                         print(f"pg_dump stderr:\n{exc.stderr}")
                     raise
 
+                size_gb = os.path.getsize(dump_path) / 1e9
+                print(f"pg_dump finished: {size_gb:.1f} GB, uploading...")
+
                 upload_file_to_s3(
                     bucket_name,
                     blob_path,
@@ -122,10 +117,29 @@ def backup_db_to_hetzner():
 
                 print(f"Uploaded backup to s3://{bucket_name}/{blob_path}")
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-        date_re = re.compile(r"/date=(\d{4}-\d{2}-\d{2})/")
-        for name in db_names:
-            delete_prefix = f"{prefix}/{name}/"
+        return run_backup()
+
+    def make_cleanup_task(db_name):
+        # Runs only after this database's backup succeeded, so repeated upload
+        # failures never age out the last good backups.
+        @task(task_id=f"cleanup_{db_name}")
+        def cleanup_old_backups():
+            import boto3
+            import os
+            import re
+            from datetime import datetime, timedelta, timezone
+
+            bucket_name = os.getenv("HETZNER_BUCKET_NAME")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url="https://fsn1.your-objectstorage.com",
+                aws_access_key_id=os.getenv("HETZNER_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("HETZNER_SECRET_ACCESS_KEY"),
+            )
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+            date_re = re.compile(r"/date=(\d{4}-\d{2}-\d{2})/")
+            delete_prefix = f"{PREFIX}/{db_name}/"
             continuation_token = None
             while True:
                 list_kwargs = {"Bucket": bucket_name, "Prefix": delete_prefix}
@@ -152,7 +166,18 @@ def backup_db_to_hetzner():
                     break
                 continuation_token = response.get("NextContinuationToken")
 
-    run_backup()
+        return cleanup_old_backups()
+
+    # Backups run sequentially (avoid parallel pg_dumps / 136 GB of concurrent tmp files),
+    # but each one runs even if the previous database's backup failed (all_done).
+    prev_backup = None
+    for db_name in DB_NAMES:
+        backup = make_backup_task(db_name, "all_success" if prev_backup is None else "all_done")
+        cleanup = make_cleanup_task(db_name)
+        backup >> cleanup
+        if prev_backup is not None:
+            prev_backup >> backup
+        prev_backup = backup
 
 
 backup_db_to_hetzner()

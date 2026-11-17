@@ -690,11 +690,16 @@ def upload_file_to_s3(bucket, path_name, local_path, cf_distribution_id=None, em
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
         )
     elif destination == 'hetzner':
-        multipart_chunk_mb = 64
-        max_concurrency = 3
+        # Hetzner Object Storage (fsn1) intermittently returns 503 / malformed 400s
+        # under load. Larger parts mean fewer requests (a ~136 GB web3 dump is ~540
+        # parts instead of ~2100), lower concurrency reduces pressure on the endpoint,
+        # and adaptive retries back off client-side when throttled. A single part
+        # exhausting its retries aborts the whole multipart upload, so be patient.
+        multipart_chunk_mb = 256
+        max_concurrency = 2
         read_timeout = 300
         connect_timeout = 30
-        retry_attempts = 10
+        retry_attempts = 20
 
         s3 = boto3.client(
             "s3",
@@ -706,7 +711,7 @@ def upload_file_to_s3(bucket, path_name, local_path, cf_distribution_id=None, em
                 read_timeout=read_timeout,
                 retries={
                     "max_attempts": retry_attempts,
-                    "mode": "standard",
+                    "mode": "adaptive",
                 },
             ),
         )
@@ -715,6 +720,8 @@ def upload_file_to_s3(bucket, path_name, local_path, cf_distribution_id=None, em
             multipart_chunksize=multipart_chunk_mb * 1024 * 1024,
             max_concurrency=max_concurrency,
         )
+        # Cap buffered parts (default 10 x 256 MB = 2.5 GB RAM) to ~1 GB.
+        transfer_config.max_in_memory_upload_chunks = 4
         
     # Upload the file to S3
     upload_kwargs = {"Config": transfer_config} if transfer_config else {}
