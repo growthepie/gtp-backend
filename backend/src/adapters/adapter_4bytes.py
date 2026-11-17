@@ -40,7 +40,10 @@ class Adapter4Bytes(AbstractAdapter):
         if self.provider not in ['sourcify', 'verifieralliance']:
             raise ValueError("Provider must be either 'sourcify' or 'verifieralliance'")
         elif self.provider == 'sourcify':
-            self.base_url = "https://export.sourcify.app/"
+            # Direct GCS export bucket. The old vanity host (export.sourcify.app)
+            # was retired and now 404s on manifest.json; this mirrors the move
+            # adapter_verifier_alliance.py already made to the GCS bucket URL.
+            self.base_url = "https://storage.googleapis.com/sourcify-database-export/"
         else:
             self.base_url = "https://export.verifieralliance.org/"
 
