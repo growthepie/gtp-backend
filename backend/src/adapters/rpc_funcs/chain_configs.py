@@ -402,6 +402,65 @@ chain_configs ={
       "from_address"
     ]
   },
+  # Polygon PoS (Bor): L1-style fields like 'ethereum' (EIP-1559, no L1 fee), but only empty_input instead of the
+  # full calldata to keep the table small (~4M tx/day). Fees are in POL (metadata_gas_token).
+  "polygon_pos": {
+    "column_mapping": {
+      "blockNumber": "block_number",
+      "hash": "tx_hash",
+      "from": "from_address",
+      "to": "to_address",
+      "gasPrice": "gas_price",
+      "gas": "gas_limit",
+      "gasUsed": "gas_used",
+      "value": "value",
+      "status": "status",
+      "input": "empty_input",
+      "block_timestamp": "block_timestamp",
+      "maxFeePerGas": "max_fee_per_gas",
+      "maxPriorityFeePerGas": "max_priority_fee_per_gas",
+      "type": "tx_type",
+      "nonce": "nonce",
+      "transactionIndex": "position",
+      "baseFeePerGas": "base_fee_per_gas"
+    },
+    "numeric_columns": [
+      "gas_price",
+      "gas_used",
+      "value",
+      "max_fee_per_gas",
+      "max_priority_fee_per_gas",
+      "base_fee_per_gas"
+    ],
+    "special_operations": [
+      "calculate_priority_fee",
+      "convert_input_to_boolean",
+      "calculate_tx_fee"
+    ],
+    "date_columns": {
+      "block_timestamp": "s"
+    },
+    "status_mapping": {
+      "0": 0,
+      "1": 1,
+      "default": -1
+    },
+    "bytea_columns": [
+      "tx_hash",
+      "to_address",
+      "from_address"
+    ],
+    "value_conversion": {
+      "gas_price": 1000000000000000000,
+      "value": 1000000000000000000,
+      "max_fee_per_gas": 1000000000000000000,
+      "max_priority_fee_per_gas": 1000000000000000000
+    },
+    "address_columns": [
+      "to_address",
+      "from_address"
+    ]
+  },
   "op_chains": {
     "required_columns": [
       "l1GasUsed",
