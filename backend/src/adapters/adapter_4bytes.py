@@ -5,7 +5,6 @@ import polars as pl
 import requests
 import getpass
 import json
-import glob
 import os
 from eth_utils import keccak
 import tempfile
@@ -40,27 +39,44 @@ class Adapter4Bytes(AbstractAdapter):
         if self.provider not in ['sourcify', 'verifieralliance']:
             raise ValueError("Provider must be either 'sourcify' or 'verifieralliance'")
         elif self.provider == 'sourcify':
-            self.base_url = "https://export.sourcify.app/"
+            # moved from export.sourcify.app (manifest.json) to GCS bucket, files listed via S3-style XML listing
+            self.base_url = "https://export.sourcify.dev/"
         else:
             self.base_url = "https://export.verifieralliance.org/"
 
-        ## download all verified contracts
-        # Notes: 
-        # * contracts are not sorted in manifest.json by date, random assortment within the 200+ files, every time whole download required
-        # * Good internet required as files are large, in w3 hub internet took 35min and 8s 
-        manifest_data = self.get_master_json()['files']['compiled_contracts']
-        # create folder if not exists
-        if not os.path.exists('compiled_contracts'):
-            os.makedirs('compiled_contracts', exist_ok=True)
-            already_downloaded = []
-        else: # if last run failed, the folder already exists with some files in them but not all
-            print("Folder compiled_contracts already exists, resuming download from last run...")
-            already_downloaded = os.listdir('compiled_contracts')
+        ## download verified contracts (incremental, ETag-based cache)
+        # Notes:
+        # * full export is ~40GB (600 files), but only the newest few files change between runs
+        # * per-file signature aggregates are cached in cache_dir together with the source file's ETag;
+        #   only new/changed files are downloaded, files no longer listed are dropped from the cache
+        # * delete cache_dir to force a full rebuild
+        self.cache_dir = extract_params.get('cache_dir', os.path.expanduser(f'~/.cache/gtp_4byte/{self.provider}'))
+        os.makedirs(self.cache_dir, exist_ok=True)
+        etag_path = os.path.join(self.cache_dir, 'etags.json')
+        cached_etags = {}
+        if os.path.exists(etag_path):
+            with open(etag_path) as fh:
+                cached_etags = json.load(fh)
 
-        for f in manifest_data:
-            if f.split('/')[-1] in already_downloaded:
-                print(f"Skipping {f}, already downloaded.")
-                continue
+        remote_files = self.get_compiled_contracts_files()  # {path: etag or None}
+
+        # drop cache entries for files that no longer exist upstream
+        for f in list(cached_etags):
+            if f not in remote_files:
+                cached_file = os.path.join(self.cache_dir, os.path.basename(f))
+                if os.path.exists(cached_file):
+                    os.remove(cached_file)
+                del cached_etags[f]
+                print(f"Removed {f} from cache, no longer listed upstream.")
+        self.save_etags(cached_etags, etag_path)
+
+        to_process = [
+            f for f, etag in remote_files.items()
+            if etag is None or cached_etags.get(f) != etag or not os.path.exists(os.path.join(self.cache_dir, os.path.basename(f)))
+        ]
+        print(f"{len(remote_files)} files upstream, {len(remote_files) - len(to_process)} unchanged in cache, {len(to_process)} to download.")
+
+        for f in to_process:
             # Download parquet export
             df = self.download_parquet(f)
             # Collect all signatures first
@@ -78,19 +94,21 @@ class Adapter4Bytes(AbstractAdapter):
                         'signature': details['signature_with_params'], 
                         'count': 1
                     })
-            # Create DataFrames and aggregate
-            if not all_with_params:
-                print(f"No function signatures found in {f}, skipping.")
-                continue
-            df_with_params = pl.DataFrame(all_with_params).group_by(['4byte', 'signature']).agg(pl.col('count').sum())
-            # Save DataFrames to Parquet
+            # Create DataFrames and aggregate (empty files are cached too, so they aren't re-downloaded every run)
+            schema = {'4byte': pl.Utf8, 'signature': pl.Utf8, 'count': pl.Int64}
+            df_with_params = pl.DataFrame(all_with_params, schema=schema).group_by(['4byte', 'signature']).agg(pl.col('count').sum())
             df_with_params = df_with_params.sort('count', descending=True)
-            df_with_params.write_parquet(f"{f.split('.')[0]}.parquet")
+            # write atomically, then record etag so an interrupted run resumes cleanly
+            cached_file = os.path.join(self.cache_dir, os.path.basename(f))
+            df_with_params.write_parquet(cached_file + '.tmp')
+            os.replace(cached_file + '.tmp', cached_file)
+            cached_etags[f] = remote_files[f]
+            self.save_etags(cached_etags, etag_path)
             print(f"Processed {f}: {len(df_with_params)} with params")
 
-        ## combine all parquet files into one final file called "4bytes.parquet" & "four_byte_lookup.pkl" and save under self.save_path_parquet & self.save_path_lookup
-        files = glob.glob("compiled_contracts/*.parquet")
-        print(f"Found {len(files)} parquet files")
+        ## combine all cached parquet files into one final file called "4bytes.parquet" & "four_byte_lookup.pkl" and save under self.save_path_parquet & self.save_path_lookup
+        files = [os.path.join(self.cache_dir, os.path.basename(f)) for f in remote_files]
+        print(f"Combining {len(files)} cached parquet files")
         all_df = []
         for file in files:
             df = pl.read_parquet(file)
@@ -118,12 +136,6 @@ class Adapter4Bytes(AbstractAdapter):
         
         print(f"Combined results: {len(combined_df)} rows")
 
-        ## delete the folder "compiled_contracts/*.parquet" 
-        for file in files:
-            os.remove(file)
-        os.rmdir('compiled_contracts')
-        print("Deleted all temporary files.")
-
 
     def load(self, load_params:dict):
         # Load the path of where to upload the 4bytes.parquet & four_byte_lookup.pkl file
@@ -143,6 +155,42 @@ class Adapter4Bytes(AbstractAdapter):
 
 
 #-#-#-#-# Helper Functions #-#-#-#-#
+
+    def save_etags(self, etags, path):
+        """Atomically write the {path: etag} cache index"""
+        with open(path + '.tmp', 'w') as fh:
+            json.dump(etags, fh)
+        os.replace(path + '.tmp', path)
+
+    def get_compiled_contracts_files(self):
+        """Return {parquet path (relative to base_url): etag} for the configured provider (etag None if unknown)"""
+        if self.provider == 'sourcify':
+            return self.list_bucket_files('v2/compiled_contracts/')
+        return {f: None for f in self.get_master_json()['files']['compiled_contracts']}
+
+    def list_bucket_files(self, prefix):
+        """List all .parquet keys under prefix via the S3-compatible XML listing (handles pagination), returns {key: etag}"""
+        import xml.etree.ElementTree as ET
+        ns = {'s3': 'http://doc.s3.amazonaws.com/2006-03-01'}
+        keys, marker = {}, ''
+        while True:
+            response = requests.get(self.base_url, params={'prefix': prefix, 'marker': marker})
+            if response.status_code != 200:
+                raise Exception(f"Failed to list files from {self.provider}: {response.status_code}")
+            root = ET.fromstring(response.content)
+            contents = root.findall('s3:Contents', ns)
+            page = [c.findtext('s3:Key', namespaces=ns) for c in contents]
+            for c in contents:
+                key = c.findtext('s3:Key', namespaces=ns)
+                if key.endswith('.parquet'):
+                    keys[key] = c.findtext('s3:ETag', default='', namespaces=ns).strip('"') or None
+            if root.findtext('s3:IsTruncated', default='false', namespaces=ns) != 'true' or not page:
+                break
+            marker = root.findtext('s3:NextMarker', default=None, namespaces=ns) or page[-1]
+        if not keys:
+            raise Exception(f"No parquet files found under {self.base_url}?prefix={prefix}")
+        print(f"Found {len(keys)} files under {prefix} from {self.provider}")
+        return keys
 
     def get_master_json(self):
         """Get the master.json from {provider} api endpoint"""
