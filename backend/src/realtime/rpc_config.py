@@ -100,6 +100,19 @@ rpc_config = {
         "sleeper": 1,
         "calc_fees": True,
     },
+    #OP Stack, Custom Gas (WBT)
+    "whitechain": {
+        "name": "Whitechain",
+        "processors": "evm_custom_gas",
+        "stack": "op_stack",
+        "sleeper": 2,
+        "calc_fees": True,
+        "gas_token": {
+            "symbol": "WBT",
+            "coingecko_id": "whitebit",
+            "decimals": 18,
+        },
+    },
     
     ## Nitro/Arbitrum Orbit chains
     "arbitrum": {
