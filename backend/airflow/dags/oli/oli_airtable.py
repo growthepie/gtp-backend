@@ -159,10 +159,12 @@ def etl():
         at.clear_all_airtable(table)
 
         # set 'approve' column to False for all records with temp_owner_project filled out
+        # table can be empty after clearing (no rows with temp_owner_project) -> df has no columns
         df_unapprove = at.read_airtable(table)
-        df_unapprove['approve'] = False
-        df_unapprove = df_unapprove[['id', 'approve']]
-        at.update_airtable(table, df_unapprove)
+        if not df_unapprove.empty:
+            df_unapprove['approve'] = False
+            df_unapprove = df_unapprove[['id', 'approve']]
+            at.update_airtable(table, df_unapprove)
 
         # get top unlabelled contracts, short and long term and also inactive contracts
         df0 = db_connector.get_unlabelled_contracts('20', '720') # top 20 contracts per chain from last 720 days
