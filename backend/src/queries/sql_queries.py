@@ -173,7 +173,20 @@ sql_queries = [
         ,SQLQuery(metric_key = "cca_last7d_exclusive", origin_key = "robinhood", jinja_path='chain_metrics/select_cca_last7d.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "cca_weekly_exclusive", origin_key = "robinhood", jinja_path='chain_metrics/select_cca_weekly.sql.j2', currency_dependent = False)
 
-        ## Polygon PoS - only AA related queries
+        ## Polygon PoS - from our own raw data (polygon_pos_tx) since 2026-11-17, fees in POL -> custom gas queries
+        ,SQLQuery(metric_key = "txcount_comparison", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcount.sql.j2', query_parameters={"filter_col" : "gas_price"}, currency_dependent = False)
+        ,SQLQuery(metric_key = "txcount", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcount.sql.j2', query_parameters={"filter_col" : "gas_price"}, currency_dependent = False)
+        ,SQLQuery(metric_key = "txcount_plain", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcount_plain.sql.j2', currency_dependent = False)
+        ,SQLQuery(metric_key = "gas_per_second", origin_key = "polygon_pos", jinja_path='chain_metrics/select_gas_per_second.sql.j2', currency_dependent = False)
+        ,SQLQuery(metric_key = "fees_paid_eth", origin_key = "polygon_pos", jinja_path='chain_metrics/select_fees_paid_custom_gas.sql.j2')
+        ,SQLQuery(metric_key = "txcosts_median_eth", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcosts_median_custom_gas.sql.j2')
+        ## hourly
+        ,SQLQuery(metric_key = "txcount", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcount_hourly.sql.j2', query_parameters={"filter_col" : "gas_price"}, currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "daa", origin_key = "polygon_pos", jinja_path='chain_metrics/select_aa_hourly.sql.j2', currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "gas_per_second", origin_key = "polygon_pos", jinja_path='chain_metrics/select_gas_per_second_hourly.sql.j2', currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "txcosts_median_eth", origin_key = "polygon_pos", jinja_path='chain_metrics/select_txcosts_median_custom_gas_hourly.sql.j2', run_hourly = True)
+        ,SQLQuery(metric_key = "fees_paid_eth", origin_key = "polygon_pos", jinja_path='chain_metrics/select_fees_paid_custom_gas_hourly.sql.j2', run_hourly = True)
+        ## daily AA
         ,SQLQuery(metric_key = "daa", origin_key = "polygon_pos", jinja_path='chain_metrics/select_daa.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "waa", origin_key = "polygon_pos", jinja_path='chain_metrics/select_waa.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "maa", origin_key = "polygon_pos", jinja_path='chain_metrics/select_maa.sql.j2', currency_dependent = False)

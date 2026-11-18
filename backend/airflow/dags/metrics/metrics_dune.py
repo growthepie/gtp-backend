@@ -55,11 +55,12 @@ def etl():
                     'query_id': 6357340,
                     'params': {'days': 3}
                 },
-                {
-                    'name': 'polygon_pos_fundamentals',
-                    'query_id': 6371012,
-                    'params': {'days': 3}
-                },
+                # polygon_pos_fundamentals (6371012): replaced by our own raw data (sql_queries.py) since 2026-11-17
+                # {
+                #     'name': 'polygon_pos_fundamentals',
+                #     'query_id': 6371012,
+                #     'params': {'days': 3}
+                # },
                 {
                     'name': 'ronin_fundamentals',
                     'query_id': 6776075,
@@ -697,9 +698,9 @@ def etl():
     run_mega_contract_level()
     run_mega_category_level()
 
-    ## Polygon POS tasks
-    run_polygon_contract_level()
-    run_polygon_category_level()
+    ## Polygon POS tasks: replaced by our own raw data (raw_polygon_pos -> polygon_pos_tx) since 2026-11-17, kept for manual reloads
+    #run_polygon_contract_level()
+    #run_polygon_category_level()
 
     ## Robinhood tasks
     #run_robinhood_aa() # replaced by metrics_dune_hourly (see above)

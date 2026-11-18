@@ -47,7 +47,7 @@ def etl():
 
         for origin_key, name, query_id in [
             ('megaeth', 'megaeth_fundamentals_hourly', 9121753),
-            ('polygon_pos', 'polygon_pos_fundamentals_hourly', 9121754),
+            # ('polygon_pos', 'polygon_pos_fundamentals_hourly', 9121754), # replaced by our own raw data (sql_queries.py hourly) since 2026-11-17
             ('ronin', 'ronin_fundamentals_hourly', 9121755),
             ('robinhood', 'robinhood_fundamentals_hourly', 9121756),
         ]:
@@ -480,8 +480,9 @@ def etl():
     run_megaeth_contract_level_hourly()
     run_megaeth_contract_aa_hourly()
 
-    run_polygon_pos_contract_level_hourly()
-    run_polygon_contract_aa_hourly()
+    ## Polygon PoS: replaced by our own raw data (raw_polygon_pos -> polygon_pos_tx, metrics_sql_hourly) since 2026-11-17, kept for manual reloads
+    #run_polygon_pos_contract_level_hourly()
+    #run_polygon_contract_aa_hourly()
 
     run_robinhood_contract_level_hourly()
     run_robinhood_contract_aa_hourly()

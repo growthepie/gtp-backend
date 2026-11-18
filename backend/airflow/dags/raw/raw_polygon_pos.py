@@ -2,9 +2,8 @@ from datetime import datetime, timedelta
 from airflow.sdk import dag, task
 from src.misc.airflow_utils import alert_via_webhook
 
-## Polygon PoS raw tx data from public RPCs (sys_rpc_config), replacing the Dune queries over time.
-## Parallel run first: metrics still come from Dune (polygon_pos stays in the Dune special-case lists in adapter_sql /
-## db_connector / json_gen) until polygon_pos_tx has been compared against the Dune numbers.
+## Polygon PoS raw tx data from public RPCs (sys_rpc_config). Source of all Polygon PoS metrics since 2026-11-17
+## (before that: Dune + BigQuery). Verified identical to Dune's polygon.transactions for 2026-11-17 (~/polygon_raw_vs_dune.py).
 ## Table DDL: backend/src/queries/raw/polygon_pos_tx_ddl.sql
 
 @dag(

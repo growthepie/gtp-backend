@@ -300,7 +300,7 @@ class AdapterSQL(AbstractAdapter):
             else:
                 days = days
                 
-            if chain in ['megaeth', 'polygon_pos', 'starknet', 'ronin', 'robinhood']:
+            if chain in ['megaeth', 'starknet', 'ronin', 'robinhood']: # Dune chains (polygon_pos on own raw data since 2026-11-17)
                 if chain == 'starknet':
                     ## determin total usage
                     print(f"...aggregating total usage for starknet and last {days} days...")
@@ -392,7 +392,7 @@ class AdapterSQL(AbstractAdapter):
                 days = int(days)
             
             ## Starknet data isn't stored in fact_active_addresses as we only keep EVM addresses in here
-            if origin_key not in ['starknet', 'megaeth', 'polygon_pos', 'ronin', 'robinhood']:
+            if origin_key not in ['starknet', 'megaeth', 'ronin', 'robinhood']:
                 print(f"...aggregating + inserting active addresses data for {origin_key} and last {days} days and days_end set to {days_end}...")
                 self.db_connector.aggregate_unique_addresses(origin_key, days, days_end)
 
@@ -404,7 +404,7 @@ class AdapterSQL(AbstractAdapter):
                 self.db_connector.aggregate_unique_addresses_contracts_hll(origin_key, days, days_end)
 
                 ## native transfer senders for the 'eth' app, only where native transfers move ETH. Dune chains have no {chain}_tx table, their senders come from metrics_dune.run_native_transfer_aa
-                if origin_key in [chain.origin_key for chain in self.main_config if chain.metadata_gas_token == 'ETH'] and origin_key not in ['starknet', 'megaeth', 'polygon_pos', 'ronin', 'robinhood']:
+                if origin_key in [chain.origin_key for chain in self.main_config if chain.metadata_gas_token == 'ETH'] and origin_key not in ['starknet', 'megaeth', 'ronin', 'robinhood']:
                     print(f"...HLL: aggregating + inserting native transfer senders for {origin_key} and last {days} days and days_end set to {days_end}...")
                     self.db_connector.aggregate_native_transfer_senders_hll(origin_key, days, days_end)
             else:
@@ -454,7 +454,7 @@ class AdapterSQL(AbstractAdapter):
                 self.db_connector.aggregate_unique_addresses_contracts_hll_hourly(origin_key, hours, hours_end)
 
                 ## hourly native transfer senders for the 'eth' app, same chain selection as in run_active_addresses_agg
-                if origin_key in [chain.origin_key for chain in self.main_config if chain.metadata_gas_token == 'ETH'] and origin_key not in ['starknet', 'megaeth', 'polygon_pos', 'ronin', 'robinhood']:
+                if origin_key in [chain.origin_key for chain in self.main_config if chain.metadata_gas_token == 'ETH'] and origin_key not in ['starknet', 'megaeth', 'ronin', 'robinhood']:
                     print(f"...HLL: aggregating + inserting native transfer senders for {origin_key} and last {hours} hours and hours_end set to {hours_end}...")
                     self.db_connector.aggregate_native_transfer_senders_hll_hourly(origin_key, hours, hours_end)
             else:
@@ -522,7 +522,7 @@ class AdapterSQL(AbstractAdapter):
                         if origin_key == 'ethereum' and granularity != 'hourly':
                                 continue
                         
-                        if origin_key in ['mantle', 'metis', 'celo']:
+                        if origin_key in ['mantle', 'metis', 'celo', 'polygon_pos']: # custom gas token chains
                             ## a little more complex cte because our coingecko data can be 1 day behind
                             additional_cte = f"""
                                 date_series AS (

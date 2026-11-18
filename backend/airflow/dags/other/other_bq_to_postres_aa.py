@@ -14,7 +14,7 @@ from src.misc.airflow_utils import alert_via_webhook
     description='Load active addresses from BigQuery to Postgres',
     tags=['other'],
     start_date=datetime(2025,12,21),
-     schedule='50 1 * * *'
+     schedule=None ## was '50 1 * * *'. Polygon PoS active addresses come from our own raw data (polygon_pos_tx) since 2026-11-17; kept for manual backfills
 )
 
 def run_dag():

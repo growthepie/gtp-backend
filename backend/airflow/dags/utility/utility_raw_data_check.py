@@ -60,7 +60,7 @@ def check():
         db_connector = DbConnector()
 
         for chain in main_config:
-            if chain.api_deployment_flag != 'PROD' or chain.origin_key in ['megaeth', 'polygon_pos', 'ronin', 'robinhood']:
+            if chain.api_deployment_flag != 'PROD' or chain.origin_key in ['megaeth', 'ronin', 'robinhood']: # Dune chains, no raw data (polygon_pos on own raw data since 2026-11-17)
                 continue
 
             ## arbitrum_nova: low activity, blocks can be ~60min apart -> only alert after 5h
