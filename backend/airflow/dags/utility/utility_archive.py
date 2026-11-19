@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import gcsfs
 import polars as pl
 from airflow.sdk import dag, task
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from sqlalchemy import inspect
@@ -31,22 +32,61 @@ def save_to_gcs(df: pl.DataFrame, path: str, fs: Optional[gcsfs.GCSFileSystem]) 
     logger.info("Saved to GCS: %s", path)
 
 
-def get_bq_max_block(client: bigquery.Client, table_name: str) -> Optional[int]:
-    """Fetch the current max block in BQ for the table; return None if missing."""
+def gcs_prefix_has_files(fs: gcsfs.GCSFileSystem, prefix: str) -> bool:
+    """Return True if any object exists under the given GCS prefix (bucket/path, no gs://)."""
+    try:
+        return len(fs.ls(prefix)) > 0
+    except FileNotFoundError:
+        return False
+
+
+def handle_missing_bq_table(fs: gcsfs.GCSFileSystem, table_name: str, gcs_prefix: str) -> None:
+    """Handle a 404 on a gtp_archive external table.
+
+    - No files under the GCS prefix yet: expected for a newly onboarded chain/table
+      (the BQ external table can only be created once data exists). Log, no alert.
+    - Files already exist: the external table was never created. Starting from scratch
+      would re-archive everything, so fail loudly instead.
+    """
+    if gcs_prefix_has_files(fs, gcs_prefix):
+        raise RuntimeError(
+            f"BQ external table growthepie.gtp_archive.{table_name} is missing but archived files "
+            f"exist under gs://{gcs_prefix}/. Create the external table (copy the definition of an "
+            f"existing gtp_archive table) before re-running, otherwise data gets re-archived."
+        )
+    logger.info(
+        "BQ table gtp_archive.%s does not exist yet and gs://%s/ is empty - first archive run, "
+        "starting from scratch. Create the BQ external table once files have been written.",
+        table_name,
+        gcs_prefix,
+    )
+
+
+def get_bq_max_block(
+    client: bigquery.Client,
+    table_name: str,
+    fs: gcsfs.GCSFileSystem,
+    bucket_name: str,
+) -> Optional[int]:
+    """Fetch the current max block in BQ for the table.
+
+    Returns None only if nothing has been archived yet (table missing and GCS empty, or table empty).
+    Any other BQ error is raised: returning None would restart from block 0 and duplicate files.
+    """
     query = f"""
-    SELECT 
+    SELECT
         MAX(block_number) AS max_block
-    FROM `growthepie.gtp_archive.{table_name}` 
+    FROM `growthepie.gtp_archive.{table_name}`
     WHERE date > '2026-01-01'
     """
     try:
-        results = client.query(query).result()
-        df_bq = results.to_dataframe()
-        return int(df_bq["max_block"][0]) if not df_bq.empty else None
-    except Exception as exc:  # broad catch: table may not exist yet
-        logger.warning("Could not read max block for %s from BQ: %s", table_name, exc)
-        send_discord_message(f"Archival DAG: Could not read max block for {table_name} from BQ: {exc}")
+        df_bq = client.query(query).result().to_dataframe()
+    except NotFound:
+        handle_missing_bq_table(fs, table_name, f"{bucket_name}/db_tx/{table_name}")
         return None
+    if df_bq.empty or df_bq["max_block"].isnull().all():
+        return None
+    return int(df_bq["max_block"][0])
 
 
 def get_bq_max_date(
@@ -54,32 +94,35 @@ def get_bq_max_date(
     table_name: str,
     origin_key: str,
     archival_date: date,
+    fs: gcsfs.GCSFileSystem,
+    bucket_name: str,
 ) -> Optional[date]:
-    """Fetch the current max date in BQ for the table and origin_key; return None if missing."""
+    """Fetch the current max date in BQ for the table and origin_key.
+
+    Returns None only if nothing has been archived yet. Other BQ errors are raised.
+    """
     query = f"""
-    SELECT 
+    SELECT
         MAX(date) AS max_date
-    FROM `growthepie.gtp_archive.{table_name}` 
+    FROM `growthepie.gtp_archive.{table_name}`
     WHERE origin_key = '{origin_key}'
       AND date <= '{archival_date}'
     """
     try:
-        results = client.query(query).result()
-        df_bq = results.to_dataframe()
-        if df_bq.empty or df_bq["max_date"].isnull().all():
-            return None
-        max_date = df_bq["max_date"][0]
-        if isinstance(max_date, datetime):
-            return max_date.date()
-        if isinstance(max_date, date):
-            return max_date
-        if isinstance(max_date, str):
-            return datetime.strptime(max_date, "%Y-%m-%d").date()
+        df_bq = client.query(query).result().to_dataframe()
+    except NotFound:
+        handle_missing_bq_table(fs, table_name, f"{bucket_name}/db_other/{table_name}")
         return None
-    except Exception as exc:  # broad catch: table may not exist yet
-        logger.warning("Could not read max date for %s from BQ: %s", table_name, exc)
-        send_discord_message(f"Archival DAG: Could not read max date for {table_name} from BQ: {exc}")
+    if df_bq.empty or df_bq["max_date"].isnull().all():
         return None
+    max_date = df_bq["max_date"][0]
+    if isinstance(max_date, datetime):
+        return max_date.date()
+    if isinstance(max_date, date):
+        return max_date
+    if isinstance(max_date, str):
+        return datetime.strptime(max_date, "%Y-%m-%d").date()
+    return None
 
 
 def get_eligible_chains() -> List[Dict[str, str]]:
@@ -169,7 +212,8 @@ def archive_chain(table_name: str, bucket_name: str, keep_postgres_days: int, ch
     archival_date = datetime.now().date() - timedelta(days=keep_postgres_days)
     logger.info("Archival date cutoff: %s", archival_date)
 
-    start_block = (get_bq_max_block(bq_client, table_name) or -1) + 1
+    bq_max_block = get_bq_max_block(bq_client, table_name, fs, bucket_name)
+    start_block = (bq_max_block + 1) if bq_max_block is not None else 0
     logger.info("Starting from block %s for table %s", start_block, table_name)
 
     part = 0
@@ -289,7 +333,7 @@ def archive_table_by_date(
         archival_date = datetime.now().date() - timedelta(days=keep_postgres_days)
     logger.info("Archival date cutoff: %s", archival_date)
 
-    bq_max_date = get_bq_max_date(bq_client, table_name, origin_key, archival_date)
+    bq_max_date = get_bq_max_date(bq_client, table_name, origin_key, archival_date, fs, bucket_name)
     if bq_max_date:
         logger.info("BQ max date for %s (%s): %s", table_name, origin_key, bq_max_date)
         if bq_max_date >= archival_date:
