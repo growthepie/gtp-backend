@@ -204,7 +204,7 @@ def sync_check():
     Fetches the latest block numbers, checks sync state and full block support, then writes the
     synced flag for all nodes of a chain in one transaction.
 
-    The function sets a block threshold of 100 for 'arbitrum' and 30 for other chains.
+    The function sets a block threshold of 100 for 'arbitrum', 150 for 'robinhood' and 30 for other chains.
     """
     db_connector = DbConnector()
 
@@ -212,6 +212,8 @@ def sync_check():
     for chain_name in chains:
         if chain_name == 'arbitrum':
             block_threshold = 100
+        elif chain_name == 'robinhood':
+            block_threshold = 150 ## 0.1 s blocks: 150 blocks = 15 s (same rule as rpc_probe: max(30 blocks, 15 s)); 30 blocks would be only 3 s
         else:
             block_threshold = 30
             
