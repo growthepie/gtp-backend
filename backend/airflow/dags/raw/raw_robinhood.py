@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 from airflow.sdk import dag, task
 from src.misc.airflow_utils import alert_via_webhook
 
-## Robinhood Chain raw tx data from public RPCs (sys_rpc_config), to replace the Dune queries (same path as Polygon PoS in Nov 2026).
-## Parallel run first: metrics still come from Dune (robinhood stays in the Dune special-case lists in adapter_sql /
-## db_connector / metrics_sql_hourly / json_gen) until robinhood_tx has been compared against the Dune numbers.
+## Robinhood Chain raw tx data from public RPCs (sys_rpc_config). Source of all Robinhood metrics since 2026-11-18 (before: Dune).
+## Verified identical to Dune's robinhood.transactions for 2026-11-18 (~/robinhood_raw_vs_dune.py). System txs (type 106/100)
+## have gas_price > 0 here but 0 on Dune -> metrics filter on gas_used (see sql_queries.py), like arbitrum.
 ## ~9.6 blocks/s (0.1s blocks), ~5.5M tx/day. Arbitrum Nitro (Orbit) fields: chain config 'arbitrum_nitro'.
 ## Table DDL: backend/src/queries/raw/robinhood_tx_ddl.sql
 

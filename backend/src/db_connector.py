@@ -822,7 +822,7 @@ class DbConnector:
                         days_end_string = f"DATE_TRUNC('day', NOW() - INTERVAL '{days_end} days')"
                 
                 
-                if chain in ['megaeth', 'starknet', 'ronin', 'robinhood']: # Dune chains (polygon_pos on own raw data since 2026-11-17)
+                if chain in ['megaeth', 'starknet', 'ronin']: # Dune chains (polygon_pos on own raw data since 2026-11-17, robinhood since 2026-11-18)
                         exec_string= f'''
                         INSERT INTO fact_active_addresses_contract_hll (address, origin_key, date, hll_addresses)
                                 SELECT 
@@ -1063,7 +1063,7 @@ class DbConnector:
                         hours_end_string = f"DATE_TRUNC('hour', NOW() - INTERVAL '{hours_end} hours')"
                 
                 
-                if chain in ['megaeth', 'starknet', 'ronin', 'robinhood']: # Dune chains (polygon_pos on own raw data since 2026-11-17)
+                if chain in ['megaeth', 'starknet', 'ronin']: # Dune chains (polygon_pos on own raw data since 2026-11-17, robinhood since 2026-11-18)
                         exec_string= f'''
                         INSERT INTO fact_active_addresses_contract_hourly_hll (address, origin_key, hour, hll_addresses)
                                 SELECT 

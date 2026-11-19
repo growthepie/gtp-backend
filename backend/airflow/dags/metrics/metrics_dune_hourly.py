@@ -49,7 +49,7 @@ def etl():
             ('megaeth', 'megaeth_fundamentals_hourly', 9121753),
             # ('polygon_pos', 'polygon_pos_fundamentals_hourly', 9121754), # replaced by our own raw data (sql_queries.py hourly) since 2026-11-17
             ('ronin', 'ronin_fundamentals_hourly', 9121755),
-            ('robinhood', 'robinhood_fundamentals_hourly', 9121756),
+            # ('robinhood', 'robinhood_fundamentals_hourly', 9121756), # replaced by our own raw data (sql_queries.py hourly) since 2026-11-18
         ]:
             start_time = ad.get_hourly_start_time('fact_kpis_granular', 'timestamp', origin_key, "granularity = 'hourly' AND metric_key = 'txcount'", overlap_hours=overlap_hours)
             load_params = {
@@ -409,7 +409,7 @@ def etl():
         ad = AdapterDune(adapter_params, db_connector)
         overlap_hours = get_overlap_hours()
 
-        for origin_key, query_id in [('megaeth', 9121765), ('robinhood', 9121766)]:
+        for origin_key, query_id in [('megaeth', 9121765)]: # robinhood (9121766): own raw data since 2026-11-18
             start_time = ad.get_hourly_start_time('blockspace_fact_contract_level_hourly', 'hour', origin_key, f"address = {NATIVE_ADDRESS}", overlap_hours=overlap_hours)
             load_params = {
                 'queries': [
@@ -446,7 +446,7 @@ def etl():
         ad = AdapterDune(adapter_params, db_connector)
         overlap_hours = get_overlap_hours()
 
-        for origin_key, query_id in [('megaeth', 9121767), ('robinhood', 9121768)]:
+        for origin_key, query_id in [('megaeth', 9121767)]: # robinhood (9121768): own raw data since 2026-11-18
             start_time = ad.get_hourly_start_time('fact_active_addresses_contract_hourly', 'hour', origin_key, f"address = {NATIVE_ADDRESS}", overlap_hours=overlap_hours)
             load_params = {
                 'queries': [
@@ -484,8 +484,9 @@ def etl():
     #run_polygon_pos_contract_level_hourly()
     #run_polygon_contract_aa_hourly()
 
-    run_robinhood_contract_level_hourly()
-    run_robinhood_contract_aa_hourly()
+    ## Robinhood: replaced by our own raw data (raw_robinhood -> robinhood_tx, metrics_sql_hourly) since 2026-11-18, kept for manual reloads
+    #run_robinhood_contract_level_hourly()
+    #run_robinhood_contract_aa_hourly()
 
     ## ETH app (hourly native transfers on MegaETH & Robinhood)
     run_native_transfer_hourly()

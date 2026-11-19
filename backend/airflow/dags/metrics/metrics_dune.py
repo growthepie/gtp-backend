@@ -66,11 +66,12 @@ def etl():
                     'query_id': 6776075,
                     'params': {'days': 3}
                 },
-                {
-                    'name': 'robinhood_fundamentals',
-                    'query_id': 7922010,
-                    'params': {'days': 3}
-                },
+                # robinhood_fundamentals (7922010): replaced by our own raw data (sql_queries.py) since 2026-11-18
+                # {
+                #     'name': 'robinhood_fundamentals',
+                #     'query_id': 7922010,
+                #     'params': {'days': 3}
+                # },
                 {
                     'name': 'arbitrum_timeboost_qb',
                     'query_id': 5200169,
@@ -702,10 +703,10 @@ def etl():
     #run_polygon_contract_level()
     #run_polygon_category_level()
 
-    ## Robinhood tasks
+    ## Robinhood tasks: replaced by our own raw data (raw_robinhood -> robinhood_tx) since 2026-11-18, kept for manual reloads
     #run_robinhood_aa() # replaced by metrics_dune_hourly (see above)
-    run_robinhood_contract_level()
-    run_robinhood_category_level()
+    #run_robinhood_contract_level()
+    #run_robinhood_category_level()
 
     ## ETH app (native transfer senders on MegaETH & Robinhood)
     #run_native_transfer_aa() # replaced by metrics_dune_hourly (see above)

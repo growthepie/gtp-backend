@@ -163,7 +163,21 @@ sql_queries = [
         ,SQLQuery(metric_key = "cca_last7d_exclusive", origin_key = "megaeth", jinja_path='chain_metrics/select_cca_last7d.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "cca_weekly_exclusive", origin_key = "megaeth", jinja_path='chain_metrics/select_cca_weekly.sql.j2', currency_dependent = False)
 
-        ## Robinhood - only AA related queries
+        ## Robinhood Chain - from our own raw data (robinhood_tx) since 2026-11-18. Arbitrum Orbit: same definitions as arbitrum
+        ## (system txs of type 106/100 have gas_used 0 but gas_price > 0 in our RPC data -> txcount filters on gas_used, not gas_price)
+        ,SQLQuery(metric_key = "txcount_comparison", origin_key = "robinhood", jinja_path='chain_metrics/select_txcount.sql.j2', query_parameters={"filter_col" : "gas_used"}, currency_dependent = False)
+        ,SQLQuery(metric_key = "txcount", origin_key = "robinhood", jinja_path='chain_metrics/select_txcount.sql.j2', query_parameters={"filter_col" : "gas_used"}, currency_dependent = False)
+        ,SQLQuery(metric_key = "txcount_plain", origin_key = "robinhood", jinja_path='chain_metrics/select_txcount_plain.sql.j2', currency_dependent = False)
+        ,SQLQuery(metric_key = "gas_per_second", origin_key = "robinhood", jinja_path='chain_metrics/custom/orbit_select_gas_per_second.sql.j2', currency_dependent = False)
+        ,SQLQuery(metric_key = "fees_paid_eth", origin_key = "robinhood", jinja_path='chain_metrics/select_fees_paid.sql.j2')
+        ,SQLQuery(metric_key = "txcosts_median_eth", origin_key = "robinhood", jinja_path='chain_metrics/select_txcosts_median.sql.j2')
+        ## hourly
+        ,SQLQuery(metric_key = "txcount", origin_key = "robinhood", jinja_path='chain_metrics/select_txcount_hourly.sql.j2', query_parameters={"filter_col" : "gas_used"}, currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "daa", origin_key = "robinhood", jinja_path='chain_metrics/select_aa_hourly.sql.j2', currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "gas_per_second", origin_key = "robinhood", jinja_path='chain_metrics/custom/orbit_select_gas_per_second_hourly.sql.j2', currency_dependent = False, run_hourly = True)
+        ,SQLQuery(metric_key = "txcosts_median_eth", origin_key = "robinhood", jinja_path='chain_metrics/select_txcosts_median_hourly.sql.j2', run_hourly = True)
+        ,SQLQuery(metric_key = "fees_paid_eth", origin_key = "robinhood", jinja_path='chain_metrics/select_fees_paid_hourly.sql.j2', run_hourly = True)
+        ## daily AA
         ,SQLQuery(metric_key = "daa", origin_key = "robinhood", jinja_path='chain_metrics/select_daa.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "waa", origin_key = "robinhood", jinja_path='chain_metrics/select_waa.sql.j2', currency_dependent = False)
         ,SQLQuery(metric_key = "maa", origin_key = "robinhood", jinja_path='chain_metrics/select_maa.sql.j2', currency_dependent = False)
