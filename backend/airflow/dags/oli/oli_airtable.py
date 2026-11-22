@@ -496,8 +496,10 @@ def etl():
             oli = OLI(private_key=os.getenv("OLI_gtp_pk"), api_key=os.getenv("OLI_API_KEY"))
             # remove duplicates address, origin_key
             df = df.drop_duplicates(subset=['address', 'chain_id'])
-            # keep track of ids
-            ids = df['id'].tolist()
+            # keep track of Airtable ids per (lowercased address, chain_id) so only successfully attested rows get deleted
+            ids_by_key = {}
+            for rec_id, addr, cid in zip(df['id'], df['address'], df['chain_id']):
+                ids_by_key.setdefault((str(addr).lower(), cid), []).append(rec_id)
             # keep columns address, origin_key and unpivot the other columns
             df = df[['address', 'chain_id', 'contract_name', 'owner_project', 'usage_category']]
             df = df.melt(id_vars=['address', 'chain_id'], var_name='tag_id', value_name='value')
@@ -506,6 +508,7 @@ def etl():
             # filter out rows with empty values
             df = df[df['value'].notnull()]
             # go one by one and attest the new labels
+            succeeded, failed, failed_keys = [], [], []
             for group in df.groupby(['address', 'chain_id']):
                 # add source column to keep track of origin
                 df_air = group[1]
@@ -528,9 +531,31 @@ def etl():
                 chain_id = group[0][1]
                 # submit offchain attestation
                 response = oli.submit_label(address, chain_id, tags)
-                print(f"Successfully attested label for {address} on {chain_id}: {response}")
-            # at the end delete just uploaded rows from airtable
-            at.delete_airtable_ids(table, ids)
+                # submit_label never raises — it returns success=False on validation/API errors
+                if response.get('success'):
+                    succeeded.append(group[0])
+                    print(f"Successfully attested label for {address} on {chain_id}: {response}")
+                else:
+                    failed.append((address, chain_id, response.get('error')))
+                    failed_keys.append(group[0])
+                    print(f"FAILED to attest label for {address} on {chain_id}: {response.get('error')}")
+            # delete only successfully attested rows; failed (and tag-less) rows stay approved in Airtable for the next run
+            ids = [rec_id for key in succeeded for rec_id in ids_by_key.get(key, [])]
+            if ids:
+                at.delete_airtable_ids(table, ids)
+            skipped = set(ids_by_key) - set(succeeded) - set(failed_keys)
+            if skipped:
+                print(f"Skipped {len(skipped)} approved rows with no tag values (left in Airtable): {sorted(skipped)}")
+            if failed:
+                # Don't raise: read_remap >> refresh_views >> write_contracts >> ... depend on this task.
+                # Failed rows stay approved in Airtable and are retried on the next run.
+                msg = f"oli_airtable: {len(failed)} of {len(failed) + len(succeeded)} Label Pool Reattest attestations failed (rows kept in Airtable for retry): {failed}"
+                print(msg)
+                try:
+                    from src.misc.helper_functions import send_discord_message
+                    send_discord_message(msg[:1900])
+                except Exception as e:
+                    print(f"Discord alert failed: {e}")
 
     @task()
     def airtable_read_automated_labels():
@@ -559,7 +584,10 @@ def etl():
         oli = OLI(private_key=os.getenv("OLI_gtp_pk"), api_key=os.getenv("OLI_API_KEY"))
 
         df = df.drop_duplicates(subset=['address', 'chain_id'])
-        ids = df['id'].tolist()
+        # Airtable ids per (lowercased address, chain_id) so only successfully attested rows get deleted
+        ids_by_key = {}
+        for rec_id, addr, cid in zip(df['id'], df['address'], df['chain_id']):
+            ids_by_key.setdefault((str(addr).lower(), cid), []).append(rec_id)
 
         # Per-row review-diff context (NOT melted — keep the row data intact)
         review_ctx = df.set_index(['address', 'chain_id'])[
@@ -577,6 +605,7 @@ def etl():
         chain_id_to_origin_key = {c.caip2: c.origin_key for c in get_main_config()
                                   if getattr(c, 'caip2', None)}
 
+        succeeded, failed, failed_keys = [], [], []
         for group in df_tags.groupby(['address', 'chain_id']):
             df_auto = group[1].copy()
             df_auto['source'] = 'automated'
@@ -599,6 +628,9 @@ def etl():
             origin_key = chain_id_to_origin_key.get(chain_id)
 
             # ── Review diff capture ────────────────────────────────────────────
+            # Diff is computed before submit; the row is only written after a successful
+            # submit so failed (retried) attestations don't leave duplicate audit rows.
+            review_row = None
             try:
                 ctx = review_ctx.get(group[0], {})
                 ai_row = {}
@@ -612,7 +644,7 @@ def etl():
                 gtp_owner = tags.get('owner_project') or ctx.get('temp_owner_project') or None
                 gtp_no_owner = bool(ctx.get('gtp_no_owner_project', False))
                 if origin_key:
-                    db_connector.insert_contract_label_review([{
+                    review_row = {
                         'address': address,
                         'origin_key': origin_key,
                         'labeled_at': ai_row.get('labeled_at'),
@@ -626,15 +658,45 @@ def etl():
                         'gtp_usage_category': gtp_cat,
                         'gtp_owner_project': gtp_owner,
                         'gtp_no_owner_project': gtp_no_owner,
-                    }])
+                    }
             except Exception as e:
                 # Non-fatal — attestation must still proceed
-                print(f"[contract_label_review] insert failed for {address}/{chain_id}: {e}")
+                print(f"[contract_label_review] diff capture failed for {address}/{chain_id}: {e}")
 
             response = oli.submit_label(address, chain_id, tags)
+            # submit_label never raises — it returns success=False on validation/API errors
+            if not response.get('success'):
+                failed.append((address, chain_id, response.get('error')))
+                failed_keys.append(group[0])
+                print(f'FAILED to re-attest {address} on {chain_id}: {response.get("error")}')
+                continue
+            succeeded.append(group[0])
             print(f'Re-attested {address} on {chain_id}: {response}')
 
-        at.delete_airtable_ids(table, ids)
+            if review_row is not None:
+                try:
+                    db_connector.insert_contract_label_review([review_row])
+                except Exception as e:
+                    # Non-fatal — attestation already landed
+                    print(f"[contract_label_review] insert failed for {address}/{chain_id}: {e}")
+
+        # delete only successfully attested rows; failed (and tag-less) rows stay approved in Airtable for the next run
+        ids = [rec_id for key in succeeded for rec_id in ids_by_key.get(key, [])]
+        if ids:
+            at.delete_airtable_ids(table, ids)
+        skipped = set(ids_by_key) - set(succeeded) - set(failed_keys)
+        if skipped:
+            print(f"Skipped {len(skipped)} approved rows with no tag values (left in Airtable): {sorted(skipped)}")
+        if failed:
+            # Don't raise: read_remap >> refresh_views >> write_contracts >> ... depend on this task.
+            # Failed rows stay approved in Airtable and are retried on the next run.
+            msg = f"oli_airtable: {len(failed)} of {len(failed) + len(succeeded)} Label Pool Automated re-attestations failed (rows kept in Airtable for retry): {failed}"
+            print(msg)
+            try:
+                from src.misc.helper_functions import send_discord_message
+                send_discord_message(msg[:1900])
+            except Exception as e:
+                print(f"Discord alert failed: {e}")
 
     @task()
     def airtable_read_depreciated_owner_project():
