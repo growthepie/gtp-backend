@@ -3,7 +3,7 @@ from src.adapters.abstract_adapters import AbstractAdapterRaw
 from src.adapters.rpc_funcs.funcs_backfill import check_and_record_missing_block_ranges, find_first_block_of_day, find_last_block_of_day, date_to_unix_timestamp, is_block_not_found_error
 from queue import Queue, Empty
 from threading import Thread, Lock
-from src.adapters.rpc_funcs.utils import Web3CC, connect_to_gcs, check_db_connection, check_gcs_connection, get_latest_block, connect_to_node, fetch_and_process_range, load_4bytes_pickle
+from src.adapters.rpc_funcs.utils import Web3CC, connect_to_gcs, check_db_connection, check_gcs_connection, get_latest_block, connect_to_node, fetch_and_process_range, load_4bytes_lookup
 from datetime import datetime
 
 
@@ -37,9 +37,10 @@ class NodeAdapter(AbstractAdapterRaw):
         # Load 4bytes data
         # self.df_4bytes = load_4bytes_data()
         # self.four_byte_lookup = create_4byte_lookup(self.df_4bytes)
-        self.four_byte_lookup = load_4bytes_pickle()
+        # disk-backed sqlite lookup (~few MB RAM) instead of the 1.35 GB pickled dict; falls back to the pickle if missing
+        self.four_byte_lookup = load_4bytes_lookup()
 
-        print(f"Loaded {len(self.four_byte_lookup)} 4byte entries into lookup dict for user ops processing")
+        print(f"Loaded {len(self.four_byte_lookup) if self.four_byte_lookup is not None else 0} 4byte entries for user ops processing")
 
         # Try to initialize Web3 connection with the provided RPC configs
         self.w3 = None

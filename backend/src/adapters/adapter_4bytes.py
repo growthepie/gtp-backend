@@ -9,7 +9,7 @@ import os
 from eth_utils import keccak
 import tempfile
 import pickle
-from src.adapters.rpc_funcs.utils import create_4byte_lookup
+from src.adapters.rpc_funcs.utils import create_4byte_lookup, write_4byte_sqlite
 
 class Adapter4Bytes(AbstractAdapter):
 
@@ -133,6 +133,10 @@ class Adapter4Bytes(AbstractAdapter):
         with open(self.save_path_lookup, "wb") as f:
             pickle.dump(four_byte_lookup, f)
         print("Created file: four_byte_lookup.pkl")
+
+        ## write sqlite version next to the pickle: raw/backfill RPC tasks read this instead of loading the pickle (saves ~1.3 GB RAM per task)
+        write_4byte_sqlite(four_byte_lookup, self.save_path_lookup.replace('.pkl', '.sqlite'))
+        print("Created file: four_byte_lookup.sqlite")
         
         print(f"Combined results: {len(combined_df)} rows")
 

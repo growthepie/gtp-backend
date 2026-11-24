@@ -7,6 +7,10 @@ import random
 import time
 import pickle
 import math
+import json
+import sqlite3
+import threading
+from collections import OrderedDict
 from src.adapters.rpc_funcs.web3 import Web3CC
 from src.adapters.rpc_funcs.funcs_backfill import is_block_not_found_error
 from sqlalchemy import text
@@ -1494,7 +1498,84 @@ def load_4bytes_pickle():
     except Exception as e:
         print(f"Error loading four_byte_lookup.pkl: {e}")
         return None
-    
+
+class FourByteLookup:
+    """
+    Read-only, disk-backed replacement for the four_byte_lookup dict (selector -> [signatures], ordered by count).
+    The pickled dict costs ~1.35 GB RAM per process (5M+ selectors); this uses a few MB and the OS page cache
+    is shared between all raw/backfill tasks. Only .get() and len() are supported (all that user ops decoding uses).
+    Thread-safe: one sqlite connection per thread, LRU cache (incl. misses) shared under a lock.
+    """
+    def __init__(self, path, cache_size=50_000):
+        self.path = path
+        self._local = threading.local()
+        self._cache = OrderedDict()
+        self._cache_size = cache_size
+        self._lock = threading.Lock()
+        self._len = self._conn().execute("SELECT value FROM meta WHERE key='count'").fetchone()[0]
+
+    def _conn(self):
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            # immutable=1: the file is only ever replaced atomically (os.replace), never modified in place
+            conn = sqlite3.connect(f"file:{self.path}?mode=ro&immutable=1", uri=True, check_same_thread=False)
+            conn.execute("PRAGMA cache_size=-2000")  # ~2 MB page cache per connection
+            self._local.conn = conn
+        return conn
+
+    def get(self, selector, default=None):
+        with self._lock:
+            if selector in self._cache:
+                self._cache.move_to_end(selector)
+                value = self._cache[selector]
+                return default if value is None else value
+        row = self._conn().execute("SELECT sigs FROM lookup WHERE selector=?", (selector,)).fetchone()
+        value = json.loads(row[0]) if row else None
+        with self._lock:
+            self._cache[selector] = value
+            if len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
+        return default if value is None else value
+
+    def __len__(self):
+        return self._len
+
+def write_4byte_sqlite(four_byte_lookup: dict, path):
+    """Atomically writes a selector -> [signatures] dict to an sqlite file for FourByteLookup (tmp file + os.replace)."""
+    tmp_path = path + '.tmp'
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    conn = sqlite3.connect(tmp_path)
+    conn.execute("CREATE TABLE lookup (selector TEXT PRIMARY KEY, sigs TEXT NOT NULL) WITHOUT ROWID")
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER)")
+    conn.executemany("INSERT INTO lookup VALUES (?, ?)", ((k, json.dumps(list(v))) for k, v in four_byte_lookup.items()))
+    conn.execute("INSERT INTO meta VALUES ('count', ?)", (len(four_byte_lookup),))
+    conn.commit()
+    conn.close()
+    os.replace(tmp_path, path)
+
+def load_4bytes_lookup():
+    """
+    Returns a FourByteLookup backed by four_byte_lookup.sqlite (written next to the pickle by utility_4byte).
+    Falls back to loading the full pickle into memory if the sqlite file is missing or unreadable.
+    """
+    possible_paths = [
+        "/home/ubuntu/gtp/backend/four_byte_lookup.sqlite",  # Server deployment path
+        "four_byte_lookup.sqlite",
+        "backend/four_byte_lookup.sqlite",
+        os.path.join(os.path.dirname(__file__), "..", "..", "four_byte_lookup.sqlite")
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            try:
+                lookup = FourByteLookup(path)
+                print(f"Using four_byte_lookup.sqlite from {path} with {len(lookup)} entries")
+                return lookup
+            except Exception as e:
+                print(f"Error opening {path}: {e}. Falling back to pickle.")
+                break
+    return load_4bytes_pickle()
+
 # Load 4bytes data into optimized lookup dict for O(1) average time lookups
 def create_4byte_lookup(df: pl.DataFrame) -> dict:
     """
