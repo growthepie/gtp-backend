@@ -27,7 +27,7 @@ def etl():
 
         adapter.extract({
             'save_path': '', # save path of four_byte_lookup.pkl & 4bytes.parquet file inside ec2 instance
-            'provider': 'sourcify' # options: "sourcify" or "verifieralliance"
+            'provider': 'verifieralliance' # options: "sourcify" or "verifieralliance" (sourcify export endpoint returns 404)
         })
 
         adapter.load({
