@@ -8,10 +8,7 @@ from src.adapters.adapter_sql import AdapterSQL
 from src.api.json_creation import JSONCreation
 from src.main_config import get_main_config
 
-# initialize adapter
-db_connector = DbConnector()
-adapter_params = {}
-ad = AdapterSQL(adapter_params, db_connector)
+# chain list is needed at parse time to build one task per chain; served from the local conf cache (src/misc/conf_cache.py)
 main_conf = get_main_config()
 
 def create_aggregate_metrics_task(origin_key):
@@ -23,6 +20,10 @@ def create_aggregate_metrics_task(origin_key):
             'origin_keys': [origin_key],
         }
         
+        # initialize adapter inside the task (not at parse time)
+        db_connector = DbConnector()
+        ad = AdapterSQL({}, db_connector)
+
         # extract
         ad.extract(load_params)
     
@@ -46,6 +47,7 @@ def create_aggregate_metrics_task(origin_key):
 def fees_json_gen_dag():
     @task()
     def run_create_fees_json():
+        db_connector = DbConnector()
         json_creator = JSONCreation(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, "v1")
         df = json_creator.get_data_fees()
         json_creator.create_fees_table_json(df)

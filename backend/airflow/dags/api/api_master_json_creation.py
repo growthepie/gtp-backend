@@ -39,6 +39,8 @@ def json_creation():
         with open("main_conf.pkl", "wb") as file:
             pickle.dump(main_conf, file)
         upload_file_to_s3(os.getenv("S3_CF_BUCKET"), f"{api_version}/main_conf.pkl", "main_conf.pkl", os.getenv("CF_DISTRIBUTION_ID"))
+        from src.misc.conf_cache import prime_conf_cache
+        prime_conf_cache("main_conf.pkl", "main_conf.pkl", api_version)  # local conf cache gets the new pickle right away
 
         ## Update sys_main_conf table in database
         df_main_conf = pd.DataFrame([vars(project) for project in main_conf])
@@ -50,6 +52,8 @@ def json_creation():
         with open("da_conf.pkl", "wb") as file:
             pickle.dump(da_conf, file)
         upload_file_to_s3(os.getenv("S3_CF_BUCKET"), f"{api_version}/da_conf.pkl", "da_conf.pkl", os.getenv("CF_DISTRIBUTION_ID"))
+        from src.misc.conf_cache import prime_conf_cache
+        prime_conf_cache("da_conf.pkl", "da_conf.pkl", api_version)  # local conf cache gets the new pickle right away
 
         ## Create master json
         json_creator = JSONCreation(os.getenv("S3_CF_BUCKET"), os.getenv("CF_DISTRIBUTION_ID"), db_connector, api_version)
