@@ -183,8 +183,21 @@ def run_dag():
         df = ad.extract(load_params)
         print(f"Fetched {len(df)} rows from Dune query 6997383.")
 
+        # extract() returns an empty, column-less DataFrame when the Dune query returns 0 rows
+        # or when the execution errored (the exception is swallowed inside extract()). Guard
+        # against that here so we fail with an actionable message and let Airflow retry, instead
+        # of crashing downstream with a misleading "None of [...] are in the [columns]" error.
+        expected_cols = ['address', 'total_balance_usd']
+        missing = [c for c in expected_cols if c not in df.columns]
+        if df.empty or missing:
+            raise ValueError(
+                f"Dune query 6997383 returned no usable data for snapshot {snapshot_date} "
+                f"(rows={len(df)}, columns={list(df.columns)}, missing={missing}). "
+                "The query likely returned 0 rows or its execution failed upstream."
+            )
+
         # dune returns two columns
-        df = df[['address', 'total_balance_usd']]
+        df = df[expected_cols]
 
         # left join sourcify data to df based on address
         sourcify_data = db_connector.execute_query("""
